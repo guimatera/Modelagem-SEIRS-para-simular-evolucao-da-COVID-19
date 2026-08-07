@@ -55,10 +55,10 @@ while True:
             beta = params["Beta"]
             gamma = params["Gamma"]
             omega = params["Omega"]
-            mi = params["Mi"]
+            tau = params["tau"]
 
-            # Decisão entre parâmetro Mi inicial ou parâmetro Mi de Lockdown
-            amort = u if u != mi else mi
+            # Decisão entre parâmetro tau inicial ou parâmetro tau de Lockdown
+            amort = u if u != tau else tau
 
             # Array com Edos do modelo.
             SEIRSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omega*x[3] , #dS/dt
@@ -89,47 +89,46 @@ while True:
 
             # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
             reduc_transm = 1-(1/r0)
-
-            mi = params["Mi"]
+            tau = params["tau"]
 
             k = 0
             mes = 30
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
-                if mi < reduc_transm and x[2,k] > ICU and values['-lockdown-'] == 'Yes':
+                if tau < reduc_transm and x[2,k] > ICU and values['-lockdown-'] == 'Yes':
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
                     while count < mes/dt:
                         if  k == nt-1:
                             break
-                        mi = 0.7
-                        k1 = dt*f(t[k],x[:,k], mi)
-                        k2 = dt*f(t[k] + dt/2, x[:,k] + k1/2, mi)
-                        k3 = dt*f(t[k] + dt/2, x[:,k] + k2/2, mi)
-                        k4 = dt*f(t[k] + dt, x[:,k] + k3, mi)
+                        tau = 0.7
+                        k1 = dt*f(t[k],x[:,k], tau)
+                        k2 = dt*f(t[k] + dt/2, x[:,k] + k1/2, tau)
+                        k3 = dt*f(t[k] + dt/2, x[:,k] + k2/2, tau)
+                        k4 = dt*f(t[k] + dt, x[:,k] + k3, tau)
 
                         dx = (k1+2*k2+2*k3+k4)/6
                 
                         x[:,k+1] = x[:,k] + dx
                         
                         # Cálculo da variação do número básico de reprodução ao longo do tempo.
-                        rt.append(r0*((1-mi)*x[0,k]/N))
+                        rt.append(r0*((1-tau)*x[0,k]/N))
                         count += 1
                         k += 1
                 else:       
-                    mi = params["Mi"]
+                    tau = params["tau"]
 
-                    k1 = dt*f(t[k],x[:,k], mi)
-                    k2 = dt*f(t[k] + dt/2, x[:,k] + k1/2, mi)
-                    k3 = dt*f(t[k] + dt/2, x[:,k] + k2/2, mi)
-                    k4 = dt*f(t[k] + dt, x[:,k] + k3, mi)
+                    k1 = dt*f(t[k],x[:,k], tau)
+                    k2 = dt*f(t[k] + dt/2, x[:,k] + k1/2, tau)
+                    k3 = dt*f(t[k] + dt/2, x[:,k] + k2/2, tau)
+                    k4 = dt*f(t[k] + dt, x[:,k] + k3, tau)
 
                     dx = (k1+2*k2+2*k3+k4)/6
 
                     x[:,k+1] = x[:,k] + dx
 
                     # Cálculo da variação do número de reprodução ao longo do tempo.
-                    rt.append(r0*((1-mi)*x[0,k]/N))
+                    rt.append(r0*((1-tau)*x[0,k]/N))
 
                     k += 1
         
@@ -154,7 +153,7 @@ while True:
         u = float(values['-distance-']) # 0.2
 
         # Parâmetros da modelagem SEIRS.
-        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'Gamma':1/(t_infeccao), 'Omega':1/t_imunidade,'Mi': u}
+        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'Gamma':1/(t_infeccao), 'Omega':1/t_imunidade,'tau': u}
 
         
         f = lambda t, x, u : SEIRS_MODEL(x, params, N, u)
