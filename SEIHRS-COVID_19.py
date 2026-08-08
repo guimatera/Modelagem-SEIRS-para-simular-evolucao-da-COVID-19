@@ -8,7 +8,7 @@ sg.theme('Default1')
 
 # Criando layout da interface gráfica.    
 layout = [  
-            [sg.Text('Modelagem SEIRS:')],
+            [sg.Text('Modelagem SEIHRS:')],
             [sg.Text('Tamanho da população:')],
             [sg.Slider(range=(0,2e9), default_value=2e8, resolution=10000,
             size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-popsize-')],
@@ -40,7 +40,7 @@ layout = [
     
 
 # Criando a janela.
-window = sg.Window('Modelo SEIRS COVID-19', layout)
+window = sg.Window('Modelo SEIHRS COVID-19', layout)
 
 while True:
     event, values = window.read()
@@ -48,25 +48,30 @@ while True:
         break
     if event == 'Ok':
 
-        # Função que define as EDO´s da modelagem SEIRS para uma epidemia.
-        def SEIRS_MODEL(x, params, N, u):
+        # Função que define as EDO´s da modelagem SEIHRS para uma epidemia.
+        def SEIHRS_MODEL(x, params, N, u):
             # Coleta de parâmetros
             alpha = params["Alpha"]
             beta = params["Beta"]
-            gamma = params["Gamma"]
+            gammaI = params["GammaI"]
+            gammaH = params["GammaH"]
+            delta = params["Delta"]
+            mu = params["Mu"]
             omega = params["Omega"]
+
             tau = params["tau"]
 
             # Decisão entre parâmetro tau inicial ou parâmetro tau de Lockdown
             amort = u if u != tau else tau
 
             # Array com Edos do modelo.
-            SEIRSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omega*x[3] , #dS/dt
+            SEIHRSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omega*x[4] , #dS/dt
                             (1-amort)*(beta*x[0]*x[2]/N) - alpha*x[1], #dE/dt
-                            alpha*x[1] - gamma*x[2], #dI/dt
-                            gamma*x[2] - omega*x[3] #dR/dt
+                            alpha*x[1] - (gammaI + delta)*x[2], #dI/dt
+                            delta*x[2] - (gammaH + mu)*x[3], #dH/dt
+                            gammaI*x[2] + gammaH*x[3] - omega*x[4] #dR/dt
                             ]) 
-            return SEIRSdot
+            return SEIHRSdot
 
 
         # Método Runge-Kutta (Quarta Ordem) para computar a evolução das EDO´s ao longo do tempo.
@@ -80,7 +85,7 @@ while True:
             # Em média, 1 a cada 20 pessoas infectadas com a COVID-19 necessita de uma UTI.
             # O Brasil, durante os piores momentos da pandemia, disponibizou 1 UTI para cada 10000 habitantes do país.
             # Para calcular a capacidade das UTIs ao longo do tempo.
-            ICU = 1/float(values['-internacao-'])*float(values['-uti-'])/10000*N
+            ICU = (float(values['-uti-'])/10000)*N
             icu = [ICU]*nt
 
             # Para criar o vetor com dados da variação do número de reprodução básica ao longo do tempo.
@@ -88,14 +93,13 @@ while True:
             rt = [r0]
 
             # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
-            reduc_transm = 1-(1/r0)
             tau = params["tau"]
 
             k = 0
             mes = 30
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
-                if tau < reduc_transm and x[2,k] > ICU and values['-lockdown-'] == 'Yes':
+                if x[3,k] > 0.8*ICU and values['-lockdown-'] == 'Yes':
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
                     while count < mes/dt:
@@ -139,6 +143,8 @@ while True:
         t_incubacao = float(values['-incubacao-']) # 5.1
         t_infeccao = float(values['-infeccao-']) # 3.3
         t_imunidade = float(values['-imunidade-']) # 365
+        tx_internacao = float(values['-internacao-']) # 0.05
+        tx_mortalidade = 0.3; #30% dos hospitalizados falecem
 
         # Número de Reprodução Básica.
         R0 = float(values['-repr-']) # 2.5
@@ -152,18 +158,19 @@ while True:
         # 1.0 - Isolamento total(ideal).
         u = float(values['-distance-']) # 0.2
 
-        # Parâmetros da modelagem SEIRS.
-        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'Gamma':1/(t_infeccao), 'Omega':1/t_imunidade,'tau': u}
+        # Parâmetros da modelagem SEIHRS.
+        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade), 'Mu':tx_mortalidade, 'Omega':1/t_imunidade, 'tau': u}
 
         
-        f = lambda t, x, u : SEIRS_MODEL(x, params, N, u)
+        f = lambda t, x, u : SEIHRS_MODEL(x, params, N, u)
 
         # Condições iniciais do modelo.
-        e0 = 1
-        i0 = 0
+        e0 = 0
+        i0 = 1
         r0 = 0
-        s0 = N - e0 -i0 - r0
-        SEIRS_0 = np.array([s0,e0,i0,r0])
+        h0 = 0
+        s0 = N - e0 -i0 - r0 - h0
+        SEIHRS_0 = np.array([s0,e0,i0,r0,h0])
 
         # Tempo de simulação e passo.
         t0 = 0
@@ -172,18 +179,19 @@ while True:
 
 
         # Cálculo de Runge-Kutta.
-        x,t,rt,icu =  RK4_lockdown(f, SEIRS_0, t0, tf, dt, params,N)
+        x,t,rt,icu =  RK4_lockdown(f, SEIHRS_0, t0, tf, dt, params,N)
 
 
         # Plotando dos gráficos.
         fig, ax = plt.subplots(2, 1)
         
-        # Gráfico da simulação epidemiológica SEIRS.
-        ax[0].set_title('Simulação epidemiológica SEIRS')
+        # Gráfico da simulação epidemiológica SEIHRS.
+        ax[0].set_title('Simulação epidemiológica SEIHRS')
         ax[0].plot(t/365, x[0,:], 'r', label = 'S')
         ax[0].plot(t/365, x[1,:], 'g', label = 'E')
         ax[0].plot(t/365, x[2,:], 'b', label = 'I')
-        ax[0].plot(t/365, x[3,:], 'y', label = 'R')
+        ax[0].plot(t/365, x[3,:], 'm', label = 'H')
+        ax[0].plot(t/365, x[4,:], 'y', label = 'R')
         ax[0].plot(t/365, icu, linestyle = '--', color = 'k', label = 'Capacidade das UTIs')
         ax[0].set_xlabel('tempo(anos)')
         ax[0].set_ylabel('População')
