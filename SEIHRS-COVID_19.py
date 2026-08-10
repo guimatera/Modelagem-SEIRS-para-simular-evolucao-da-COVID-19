@@ -8,48 +8,58 @@ sg.theme('Default1')
 
 # Criando layout da interface gráfica.    
 layout = [  
-            [sg.Text('Modelagem SEIHRS:')],
+            [sg.Text('Modelagem SEIHRVS - Parâmetros:')],
             [sg.Text('Tamanho da população:')],
             [sg.Slider(range=(0,2e9), default_value=2e8, resolution=10000,
-            size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-popsize-')],
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-popsize-')],
             [sg.Text('UTIs disponíveis(por 10000 habitantes):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
-            size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-uti-')],
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-uti-')],
             [sg.Text('Taxa de internação nas UTIs:')],
             [sg.Slider(range=(0,1), default_value=0.05, resolution=0.01,
-            size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-internacao-')],
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-internacao-')],
             [sg.Text('R0 (Número de Reprodução Básica):')],
             [sg.Slider(range=(0,10), default_value=2.5, resolution=0.01,
-            size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-repr-')],
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-repr-')],
             [sg.Text('Tempo(anos):')],
-            [sg.Slider(range=(0,10), default_value=2, resolution=1,
-            size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-time-')],
-            [sg.Text('Nível de distanciamento social:',)],
+            [sg.Slider(range=(0,10), default_value=5, resolution=1,
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-time-')],
+            [sg.Text('Nível de distanciamento social:')],
             [sg.Slider(range=(0,1), default_value=0.2, resolution=0.01,
-            size=(50,15), orientation='horizontal', font=('Helvetica', 12),key='-distance-')],
-            [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,15),
-             font=('Helvetica', 12),key='-lockdown-')],
-            [sg.Text('Parâmetros:')],
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-distance-')],
+            [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
+            font=('Helvetica', 8),key='-vacinacao-')],
+            [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key='-taxa-vacinacao-')],
+            [sg.Text('Tempo para início da vacinação: ')],
+            [sg.Slider(range=(0,10), default_value=2, resolution=1,
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8), key='-tempo-vacinacao-')],
+            [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
+             font=('Helvetica', 8),key='-lockdown-')],
             [sg.Text('Período de Incubação(dias): '), sg.Slider(range=(0,10), default_value=5.1, resolution=0.1,
-            size=(10,15), orientation='horizontal', font=('Helvetica', 12), key= '-incubacao-')], 
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-incubacao-')], 
             [sg.Text('Período de infecção(dias): '), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
-            size=(10,15), orientation='horizontal', font=('Helvetica', 12), key= '-infeccao-')],
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-infeccao-')],
             [sg.Text('Período de imunidade(dias): '), sg.Slider(range=(0,730), default_value=365, resolution=1,
-            size=(10,15), orientation='horizontal', font=('Helvetica', 12), key= '-imunidade-')],
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-imunidade-')],
+            [sg.Text('Taxa de mortalidade: '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-mortalidade-')],
+    
             [sg.Button('Ok'), sg.Button('Cancel')]]
     
 
 # Criando a janela.
-window = sg.Window('Modelo SEIHRS COVID-19', layout)
+window = sg.Window('Modelo SEIHRVS COVID-19', layout, finalize=True)
 
 while True:
     event, values = window.read()
+
     if event == sg.WIN_CLOSED or event == 'Cancel': # Fecha janela se clicar no ícone de fechar ou no botão de cancelar.
         break
     if event == 'Ok':
 
-        # Função que define as EDO´s da modelagem SEIHRS para uma epidemia.
-        def SEIHRS_MODEL(x, params, N, u):
+        # Função que define as EDO´s da modelagem SEIHRVS para uma epidemia.
+        def SEIHRVS_MODEL(x, params, N, u, t, ICU):
             # Coleta de parâmetros
             alpha = params["Alpha"]
             beta = params["Beta"]
@@ -58,20 +68,26 @@ while True:
             delta = params["Delta"]
             mu = params["Mu"]
             omega = params["Omega"]
+            v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
 
             tau = params["tau"]
 
             # Decisão entre parâmetro tau inicial ou parâmetro tau de Lockdown
             amort = u if u != tau else tau
 
+            vacina_ativa = params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"]
+            fluxo_vacinacao = v*x[0] if vacina_ativa else 0.0
+            sobrecapacidade_uti = x[3] > ICU
+
             # Array com Edos do modelo.
-            SEIHRSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omega*x[4] , #dS/dt
+            SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omega*x[4] - fluxo_vacinacao, #dS/dt
                             (1-amort)*(beta*x[0]*x[2]/N) - alpha*x[1], #dE/dt
-                            alpha*x[1] - (gammaI + delta)*x[2], #dI/dt
-                            delta*x[2] - (gammaH + mu)*x[3], #dH/dt
-                            gammaI*x[2] + gammaH*x[3] - omega*x[4] #dR/dt
+                            alpha*x[1] - (gammaI + delta)*x[2] , #dI/dt
+                            delta*x[2] - (gammaH + mu)*x[3] if not sobrecapacidade_uti else  -(gammaH + mu)*x[3], #dH/dt
+                            gammaI*x[2] + gammaH*x[3] - omega*x[4], #dR/dt
+                            fluxo_vacinacao  #dV/dt
                             ]) 
-            return SEIHRSdot
+            return SEIHRVSdot
 
 
         # Método Runge-Kutta (Quarta Ordem) para computar a evolução das EDO´s ao longo do tempo.
@@ -144,7 +160,11 @@ while True:
         t_infeccao = float(values['-infeccao-']) # 3.3
         t_imunidade = float(values['-imunidade-']) # 365
         tx_internacao = float(values['-internacao-']) # 0.05
-        tx_mortalidade = 0.3; #30% dos hospitalizados falecem
+        vacinacao_ativa = values['-vacinacao-'] == 'Yes'
+        tx_vacinacao = float(values['-taxa-vacinacao-']) if vacinacao_ativa else 0.0 # 0.2% da população é vacinada por dia
+        tempo_inicio_vacinacao_anos = float(values['-tempo-vacinacao-']) if vacinacao_ativa else 0.0
+        tempo_inicio_vacinacao_dias = tempo_inicio_vacinacao_anos * 365
+        tx_mortalidade = float(values['-mortalidade-']); #30% dos hospitalizados falecem
 
         # Número de Reprodução Básica.
         R0 = float(values['-repr-']) # 2.5
@@ -158,19 +178,20 @@ while True:
         # 1.0 - Isolamento total(ideal).
         u = float(values['-distance-']) # 0.2
 
-        # Parâmetros da modelagem SEIHRS.
-        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade), 'Mu':tx_mortalidade, 'Omega':1/t_imunidade, 'tau': u}
+        # Parâmetros da modelagem SEIHRVS.
+        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade), 'Mu':tx_mortalidade, 'Omega':1/t_imunidade, 'v': tx_vacinacao, 'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
-        
-        f = lambda t, x, u : SEIHRS_MODEL(x, params, N, u)
+        ICU = (float(values['-uti-'])/10000)*N
+        f = lambda t, x, u : SEIHRVS_MODEL(x, params, N, u, t, ICU)
 
         # Condições iniciais do modelo.
-        e0 = 0
-        i0 = 1
+        e0 = 1
+        i0 = 0
         r0 = 0
         h0 = 0
-        s0 = N - e0 -i0 - r0 - h0
-        SEIHRS_0 = np.array([s0,e0,i0,r0,h0])
+        v0 = 0
+        s0 = N - e0 -i0 - r0 - h0 - v0
+        SEIHRVS_0 = np.array([s0,e0,i0,r0,h0,v0])
 
         # Tempo de simulação e passo.
         t0 = 0
@@ -179,19 +200,23 @@ while True:
 
 
         # Cálculo de Runge-Kutta.
-        x,t,rt,icu =  RK4_lockdown(f, SEIHRS_0, t0, tf, dt, params,N)
+        x,t,rt,icu =  RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params,N)
 
 
         # Plotando dos gráficos.
         fig, ax = plt.subplots(2, 1)
         
-        # Gráfico da simulação epidemiológica SEIHRS.
-        ax[0].set_title('Simulação epidemiológica SEIHRS')
+        # Gráfico da simulação epidemiológica SEIHRVS.
+        model_name = 'SEIHRVS' if vacinacao_ativa else 'SEIHRS'
+        ax[0].set_title(f'Simulação epidemiológica {model_name}')
         ax[0].plot(t/365, x[0,:], 'r', label = 'S')
         ax[0].plot(t/365, x[1,:], 'g', label = 'E')
         ax[0].plot(t/365, x[2,:], 'b', label = 'I')
         ax[0].plot(t/365, x[3,:], 'm', label = 'H')
         ax[0].plot(t/365, x[4,:], 'y', label = 'R')
+        if vacinacao_ativa:
+            ax[0].plot(t/365, x[5,:], 'c', label = 'V')
+            ax[0].axvline(tempo_inicio_vacinacao_anos, color='k', linestyle='-', linewidth=1.5, label='Início da vacinação')
         ax[0].plot(t/365, icu, linestyle = '--', color = 'k', label = 'Capacidade das UTIs')
         ax[0].set_xlabel('tempo(anos)')
         ax[0].set_ylabel('População')
