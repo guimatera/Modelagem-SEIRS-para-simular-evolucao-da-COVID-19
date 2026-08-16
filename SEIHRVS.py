@@ -7,10 +7,9 @@ import matplotlib.pyplot as plt
 sg.theme('Default1')  
 
 # Criando layout da interface gráfica.    
-layout = [  
-            [sg.Text('Modelagem SEIHRVS - Parâmetros:')],
+left_col = [  
             [sg.Text('Tamanho da população:')],
-            [sg.Slider(range=(0,2e9), default_value=2e8, resolution=10000,
+            [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
             size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-popsize-')],
             [sg.Text('UTIs disponíveis(por 10000 habitantes):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
@@ -46,9 +45,41 @@ layout = [
             [sg.Slider(range=(0,10), default_value=2, resolution=1,
             size=(50,10), orientation='horizontal', font=('Helvetica', 8), key='-tempo-vacinacao-')],
             [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-             font=('Helvetica', 8),key='-lockdown-')],
+             font=('Helvetica', 8),key='-lockdown-')]
+]
+
+
+
+right_col = [ 
+    [sg.Text('Condições inciais:')],
+    [sg.Text('Pessoas Expostas:')],
+    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-I0-')],
+    [sg.Text('Pessoas Infectadas:')],
+    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-I0-')],
+    [sg.Text('Pessoas Hospitalizadas:')],
+    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-H0-')],
+    [sg.Text('Pessoas Vacinadas:')],
+    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-V0-')],
+    [sg.Text('Pessoas Recuperadas:')],
+    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-R0-')],
+]
     
-            [sg.Button('Ok'), sg.Button('Cancel')]]
+            
+
+layout = [
+    [
+        [sg.Text('Modelagem SEIHRVS - Parâmetros:')],
+        sg.Column(left_col, vertical_alignment='top'), 
+        sg.Column(right_col, vertical_alignment='top'),
+    ],
+    [sg.Button('Ok'), sg.Button('Cancel')]
+]
+
     
 
 # Criando a janela.
@@ -61,7 +92,7 @@ while True:
         break
     if event == 'Ok':
 
-        # Função que define as EDO´s da modelagem SEIHRVS para uma epidemia.
+        # Função que define as EDO's da modelagem SEIHRVS para uma epidemia.
         def SEIHRVS_MODEL(x, params, N, u, t, ICU):
             # Coleta de parâmetros
             alpha = params["Alpha"]
@@ -80,7 +111,7 @@ while True:
             amort = u if u != tau else tau
 
             vacina_ativa = params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"]
-            fluxo_vacinacao = e*v*x[0] if vacina_ativa else 0.0
+            fluxo_vacinacao = e*v*x[0] if vacina_ativa else 0.0 
             sobrecapacidade_uti = x[3] > ICU
 
             # Array com Edos do modelo.
@@ -190,11 +221,11 @@ while True:
         f = lambda t, x, u : SEIHRVS_MODEL(x, params, N, u, t, ICU)
 
         # Condições iniciais do modelo.
-        e0 = 1
-        i0 = 0
-        r0 = 0
-        h0 = 0
-        v0 = 0
+        e0 = int(values['-E0-']);
+        i0 = int(values['I0-']);
+        r0 = int(values['-R0-']);
+        h0 = int(values['-H0-']);
+        v0 = int(values['-V0-']);
         s0 = N - e0 -i0 - r0 - h0 - v0
         SEIHRVS_0 = np.array([s0,e0,i0,r0,h0,v0])
 
