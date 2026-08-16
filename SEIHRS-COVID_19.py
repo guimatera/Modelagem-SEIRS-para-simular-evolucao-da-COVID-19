@@ -19,7 +19,7 @@ layout = [
             [sg.Slider(range=(0,1), default_value=0.05, resolution=0.01,
             size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-internacao-')],
             [sg.Text('R0 (Número de Reprodução Básica):')],
-            [sg.Slider(range=(0,10), default_value=2.5, resolution=0.01,
+            [sg.Slider(range=(0,20), default_value=2.5, resolution=0.1,
             size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-repr-')],
             [sg.Text('Tempo(anos):')],
             [sg.Slider(range=(0,10), default_value=5, resolution=1,
@@ -27,15 +27,6 @@ layout = [
             [sg.Text('Nível de distanciamento social:')],
             [sg.Slider(range=(0,1), default_value=0.2, resolution=0.01,
             size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-distance-')],
-            [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-            font=('Helvetica', 8),key='-vacinacao-')],
-            [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key='-taxa-vacinacao-')],
-            [sg.Text('Tempo para início da vacinação: ')],
-            [sg.Slider(range=(0,10), default_value=2, resolution=1,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8), key='-tempo-vacinacao-')],
-            [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-             font=('Helvetica', 8),key='-lockdown-')],
             [sg.Text('Período de Incubação(dias): '), sg.Slider(range=(0,10), default_value=5.1, resolution=0.1,
             size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-incubacao-')], 
             [sg.Text('Período de infecção(dias): '), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
@@ -44,6 +35,18 @@ layout = [
             size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-imunidade-')],
             [sg.Text('Taxa de mortalidade: '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
             size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-mortalidade-')],
+            [sg.Text('Ações de Controle: ')],
+            [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
+            font=('Helvetica', 8),key='-vacinacao-')],
+            [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key='-taxa-vacinacao-')],
+            [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.80, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key='-taxa-efetividade-')],
+            [sg.Text('Tempo para início da vacinação: ')],
+            [sg.Slider(range=(0,10), default_value=2, resolution=1,
+            size=(50,10), orientation='horizontal', font=('Helvetica', 8), key='-tempo-vacinacao-')],
+            [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
+             font=('Helvetica', 8),key='-lockdown-')],
     
             [sg.Button('Ok'), sg.Button('Cancel')]]
     
@@ -68,6 +71,7 @@ while True:
             delta = params["Delta"]
             mu = params["Mu"]
             omega = params["Omega"]
+            e = params["e"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
             v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
 
             tau = params["tau"]
@@ -76,7 +80,7 @@ while True:
             amort = u if u != tau else tau
 
             vacina_ativa = params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"]
-            fluxo_vacinacao = v*x[0] if vacina_ativa else 0.0
+            fluxo_vacinacao = e*v*x[0] if vacina_ativa else 0.0
             sobrecapacidade_uti = x[3] > ICU
 
             # Array com Edos do modelo.
@@ -162,6 +166,7 @@ while True:
         tx_internacao = float(values['-internacao-']) # 0.05
         vacinacao_ativa = values['-vacinacao-'] == 'Yes'
         tx_vacinacao = float(values['-taxa-vacinacao-']) if vacinacao_ativa else 0.0 # 0.2% da população é vacinada por dia
+        tx_efetividade = float(values['-taxa-efetividade-']) if vacinacao_ativa else 0.0
         tempo_inicio_vacinacao_anos = float(values['-tempo-vacinacao-']) if vacinacao_ativa else 0.0
         tempo_inicio_vacinacao_dias = tempo_inicio_vacinacao_anos * 365
         tx_mortalidade = float(values['-mortalidade-']); #30% dos hospitalizados falecem
@@ -179,7 +184,7 @@ while True:
         u = float(values['-distance-']) # 0.2
 
         # Parâmetros da modelagem SEIHRVS.
-        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade), 'Mu':tx_mortalidade, 'Omega':1/t_imunidade, 'v': tx_vacinacao, 'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
+        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade), 'Mu':tx_mortalidade, 'Omega':1/t_imunidade, 'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
         ICU = (float(values['-uti-'])/10000)*N
         f = lambda t, x, u : SEIHRVS_MODEL(x, params, N, u, t, ICU)

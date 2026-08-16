@@ -98,7 +98,7 @@ while True:
           
             return x, t
 
-        # Parâmtros de tempo(dias).
+        # Parâmetros de tempo(dias).
         t_incubacao = float(values['-incubacao-']) # 5.1
         t_infeccao = float(values['-infeccao-']) # 3.3
         t_imunidade = float(values['-imunidade-']) # 365
