@@ -6,71 +6,76 @@ import matplotlib.pyplot as plt
 # Definindo tema da interface gráfica.
 sg.theme('Default1')  
 
-# Criando layout da interface gráfica.    
+# Criando layout da interface gráfica.   
+font_size = 6
+font_style = 'Helvetica'
 left_col = [  
             [sg.Text('Tamanho da população:')],
             [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-popsize-')],
-            [sg.Text('UTIs disponíveis(por 10000 habitantes):')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
+            [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):'), sg.Slider(range=(0,2e6), default_value=10000, resolution=1,
+            size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-aumentoPopulacao-')], 
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-uti-')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-uti-')],
             [sg.Text('Taxa de internação nas UTIs:')],
             [sg.Slider(range=(0,1), default_value=0.05, resolution=0.01,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-internacao-')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-internacao-')],
             [sg.Text('R0 (Número de Reprodução Básica):')],
             [sg.Slider(range=(0,20), default_value=2.5, resolution=0.1,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-repr-')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-repr-')],
             [sg.Text('Tempo(anos):')],
             [sg.Slider(range=(0,10), default_value=5, resolution=1,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-time-')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-time-')],
             [sg.Text('Nível de distanciamento social:')],
             [sg.Slider(range=(0,1), default_value=0.2, resolution=0.01,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-distance-')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-distance-')],
             [sg.Text('Período de Incubação(dias): '), sg.Slider(range=(0,10), default_value=5.1, resolution=0.1,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-incubacao-')], 
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-incubacao-')], 
             [sg.Text('Período de infecção(dias): '), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-infeccao-')],
-            [sg.Text('Período de imunidade(dias): '), sg.Slider(range=(0,730), default_value=365, resolution=1,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-imunidade-')],
-            [sg.Text('Taxa de mortalidade: '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key= '-mortalidade-')],
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-infeccao-')],
+            [sg.Text('Período de imunidade(dias) - Recuperados: '), sg.Slider(range=(0,730), default_value=365, resolution=1,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeNatural-')],
+            [sg.Text('Período de imunidade(dias) -  Vacinados: '), sg.Slider(range=(0,730), default_value=365, resolution=1,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeVacinados-')],
+            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeNatural-')],
+            [sg.Text('Taxa de mortalidade de Infectados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
+            [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeHospitalizados-')],
             [sg.Text('Ações de Controle: ')],
             [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-            font=('Helvetica', 8),key='-vacinacao-')],
+            font=(font_style, font_size),key='-vacinacao-')],
             [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key='-taxa-vacinacao-')],
-            [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.80, resolution=0.01,
-            size=(10,10), orientation='horizontal', font=('Helvetica', 8), key='-taxa-efetividade-')],
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-vacinacao-')],
+            [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.8, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-efetividade-')],
             [sg.Text('Tempo para início da vacinação: ')],
             [sg.Slider(range=(0,10), default_value=2, resolution=1,
-            size=(50,10), orientation='horizontal', font=('Helvetica', 8), key='-tempo-vacinacao-')],
+            size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-tempo-vacinacao-')],
             [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-             font=('Helvetica', 8),key='-lockdown-')]
+             font=(font_style, 8),key='-lockdown-')]
 ]
-
-
 
 right_col = [ 
     [sg.Text('Condições inciais:')],
     [sg.Text('Pessoas Expostas:')],
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
-    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-I0-')],
+    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-E0-')],
     [sg.Text('Pessoas Infectadas:')],
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
-    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-I0-')],
+    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-I0-')],
     [sg.Text('Pessoas Hospitalizadas:')],
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
-    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-H0-')],
+    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-H0-')],
     [sg.Text('Pessoas Vacinadas:')],
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
-    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-V0-')],
+    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-V0-')],
     [sg.Text('Pessoas Recuperadas:')],
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
-    size=(50,10), orientation='horizontal', font=('Helvetica', 8),key='-R0-')],
+    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-R0-')],
 ]
-    
-            
-
+           
 layout = [
     [
         [sg.Text('Modelagem SEIHRVS - Parâmetros:')],
@@ -100,8 +105,12 @@ while True:
             gammaI = params["GammaI"]
             gammaH = params["GammaH"]
             delta = params["Delta"]
-            mu = params["Mu"]
-            omega = params["Omega"]
+            muI = params["MuI"]
+            muH = params["MuH"]
+            omegaR = params["OmegaR"]
+            omegaV = params["OmegaV"]
+            pi = params["pi"]
+            epsilon = params["epsilon"]
             e = params["e"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
             v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
 
@@ -111,15 +120,15 @@ while True:
             amort = u if u != tau else tau
 
             vacina_ativa = params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"]
-            fluxo_vacinacao = e*v*x[0] if vacina_ativa else 0.0 
+            fluxo_vacinacao = e*v*x[0] - (pi + omegaV)*x[5] if vacina_ativa else 0.0 
             sobrecapacidade_uti = x[3] > ICU
 
             # Array com Edos do modelo.
-            SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omega*x[4] - fluxo_vacinacao, #dS/dt
-                            (1-amort)*(beta*x[0]*x[2]/N) - alpha*x[1], #dE/dt
-                            alpha*x[1] - (gammaI + delta)*x[2] , #dI/dt
-                            delta*x[2] - (gammaH + mu)*x[3] if not sobrecapacidade_uti else  -(gammaH + mu)*x[3], #dH/dt
-                            gammaI*x[2] + gammaH*x[3] - omega*x[4], #dR/dt
+            SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omegaR*x[4] - pi*x[0] - fluxo_vacinacao + epsilon, #dS/dt
+                            (1-amort)*(beta*x[0]*x[2]/N) - (alpha + pi)*x[1], #dE/dt
+                            alpha*x[1] - (gammaI + delta + pi + muI)*x[2] , #dI/dt
+                            delta*x[2] - (gammaH + muH + pi)*x[3] if not sobrecapacidade_uti else  -(gammaH + muH)*x[3], #dH/dt
+                            gammaI*x[2] + gammaH*x[3] - (omegaR + pi)*x[4], #dR/dt
                             fluxo_vacinacao  #dV/dt
                             ]) 
             return SEIHRVSdot
@@ -223,17 +232,16 @@ while True:
         # Condições iniciais do modelo.
         e0 = int(values['-E0-']);
         i0 = int(values['I0-']);
-        r0 = int(values['-R0-']);
         h0 = int(values['-H0-']);
+        r0 = int(values['-R0-']);
         v0 = int(values['-V0-']);
         s0 = N - e0 -i0 - r0 - h0 - v0
-        SEIHRVS_0 = np.array([s0,e0,i0,r0,h0,v0])
+        SEIHRVS_0 = np.array([s0,e0,i0,h0,r0,v0])
 
         # Tempo de simulação e passo.
         t0 = 0
         tf = 365*int(values['-time-'])
-        dt = 0.01
-
+        dt = 1
 
         # Cálculo de Runge-Kutta.
         x,t,rt,icu =  RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params,N)
