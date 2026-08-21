@@ -7,13 +7,14 @@ import matplotlib.pyplot as plt
 sg.theme('Default1')  
 
 # Criando layout da interface gráfica.   
-font_size = 6
+font_size = 7
 font_style = 'Helvetica'
 left_col = [  
             [sg.Text('Tamanho da população:')],
             [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
-            [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):'), sg.Slider(range=(0,2e6), default_value=10000, resolution=1,
+            [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):')],
+            [sg.Slider(range=(0,2e6), default_value=10000, resolution=1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-aumentoPopulacao-')], 
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-uti-')],
@@ -43,21 +44,9 @@ left_col = [
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
             [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeHospitalizados-')],
-            [sg.Text('Ações de Controle: ')],
-            [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-            font=(font_style, font_size),key='-vacinacao-')],
-            [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-vacinacao-')],
-            [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.8, resolution=0.01,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-efetividade-')],
-            [sg.Text('Tempo para início da vacinação: ')],
-            [sg.Slider(range=(0,10), default_value=2, resolution=1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-tempo-vacinacao-')],
-            [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-             font=(font_style, 8),key='-lockdown-')]
 ]
 
-right_col = [ 
+middle_col = [ 
     [sg.Text('Condições inciais:')],
     [sg.Text('Pessoas Expostas:')],
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
@@ -75,11 +64,27 @@ right_col = [
     [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-R0-')],
 ]
+
+right_col = [
+    [sg.Text('Ações de Controle: ')],
+    [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
+    font=(font_style, font_size),key='-vacinacao-')],
+    [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
+    size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-vacinacao-')],
+    [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.8, resolution=0.01,
+    size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-efetividade-')],
+    [sg.Text('Tempo para início da vacinação: ')],
+    [sg.Slider(range=(0,10), default_value=2, resolution=1,
+    size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-tempo-vacinacao-')],
+    [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
+     font=(font_style, 8),key='-lockdown-')]
+]
            
 layout = [
     [
         [sg.Text('Modelagem SEIHRVS - Parâmetros:')],
         sg.Column(left_col, vertical_alignment='top'), 
+        sg.Column(middle_col, vertical_alignment='top'),
         sg.Column(right_col, vertical_alignment='top'),
     ],
     [sg.Button('Ok'), sg.Button('Cancel')]
