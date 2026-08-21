@@ -16,13 +16,14 @@ left_col = [
             [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):')],
             [sg.Slider(range=(0,2e6), default_value=10000, resolution=1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-aumentoPopulacao-')], 
+            [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-uti-')],
             [sg.Text('Taxa de internação nas UTIs:')],
             [sg.Slider(range=(0,1), default_value=0.05, resolution=0.01,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-internacao-')],
             [sg.Text('R0 (Número de Reprodução Básica):')],
-            [sg.Slider(range=(0,20), default_value=2.5, resolution=0.1,
+            [sg.Slider(range=(0,20), default_value=12, resolution=0.1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-repr-')],
             [sg.Text('Tempo(anos):')],
             [sg.Slider(range=(0,10), default_value=5, resolution=1,
@@ -38,9 +39,9 @@ left_col = [
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeNatural-')],
             [sg.Text('Período de imunidade(dias) -  Vacinados: '), sg.Slider(range=(0,730), default_value=365, resolution=1,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeVacinados-')],
-            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,0.1), default_value=0.001, resolution=0.001,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeNatural-')],
-            [sg.Text('Taxa de mortalidade de Infectados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            [sg.Text('Taxa de mortalidade de Infectados(dias): '), sg.Slider(range=(0,1), default_value=0.1, resolution=0.01,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
             [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeHospitalizados-')],
@@ -49,19 +50,19 @@ left_col = [
 middle_col = [ 
     [sg.Text('Condições inciais:')],
     [sg.Text('Pessoas Expostas:')],
-    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    [sg.Slider(range=(0,2e6), default_value=1, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-E0-')],
     [sg.Text('Pessoas Infectadas:')],
-    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-I0-')],
     [sg.Text('Pessoas Hospitalizadas:')],
-    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-H0-')],
     [sg.Text('Pessoas Vacinadas:')],
-    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-V0-')],
     [sg.Text('Pessoas Recuperadas:')],
-    [sg.Slider(range=(0,2e9), default_value=0, resolution=1000,
+    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-R0-')],
 ]
 
@@ -71,7 +72,7 @@ right_col = [
     font=(font_style, font_size),key='-vacinacao-')],
     [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
     size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-vacinacao-')],
-    [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.8, resolution=0.01,
+    [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.97, resolution=0.01,
     size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-efetividade-')],
     [sg.Text('Tempo para início da vacinação: ')],
     [sg.Slider(range=(0,10), default_value=2, resolution=1,
@@ -93,7 +94,7 @@ layout = [
     
 
 # Criando a janela.
-window = sg.Window('Modelo SEIHRVS COVID-19', layout, finalize=True)
+window = sg.Window('Modelo SEIHRVS', layout, finalize=True)
 
 while True:
     event, values = window.read()
@@ -114,8 +115,8 @@ while True:
             muH = params["MuH"]
             omegaR = params["OmegaR"]
             omegaV = params["OmegaV"]
-            pi = params["pi"]
-            epsilon = params["epsilon"]
+            pi = params["Pi"]
+            epsilon = params["Epsilon"]
             e = params["e"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
             v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
 
@@ -132,7 +133,7 @@ while True:
             SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omegaR*x[4] - pi*x[0] - fluxo_vacinacao + epsilon, #dS/dt
                             (1-amort)*(beta*x[0]*x[2]/N) - (alpha + pi)*x[1], #dE/dt
                             alpha*x[1] - (gammaI + delta + pi + muI)*x[2] , #dI/dt
-                            delta*x[2] - (gammaH + muH + pi)*x[3] if not sobrecapacidade_uti else  -(gammaH + muH)*x[3], #dH/dt
+                            delta*x[2] - (gammaH + muH + pi)*x[3] if not sobrecapacidade_uti else -(gammaH + muH + pi)*x[3], #dH/dt
                             gammaI*x[2] + gammaH*x[3] - (omegaR + pi)*x[4], #dR/dt
                             fluxo_vacinacao  #dV/dt
                             ]) 
@@ -164,7 +165,7 @@ while True:
             mes = 30
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > 0.8*ICU and values['-lockdown-'] == 'Yes':
+                if x[3,k] > 0.5*ICU and values['-lockdown-'] == 'Yes':
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
                     while count < mes/dt:
@@ -204,23 +205,34 @@ while True:
             return x, t, rt, icu
 
 
-        # Parâmetros de tempo(dias)
-        t_incubacao = float(values['-incubacao-']) # 5.1
-        t_infeccao = float(values['-infeccao-']) # 3.3
-        t_imunidade = float(values['-imunidade-']) # 365
-        tx_internacao = float(values['-internacao-']) # 0.05
+        # Helpers de Vacinação
         vacinacao_ativa = values['-vacinacao-'] == 'Yes'
-        tx_vacinacao = float(values['-taxa-vacinacao-']) if vacinacao_ativa else 0.0 # 0.2% da população é vacinada por dia
-        tx_efetividade = float(values['-taxa-efetividade-']) if vacinacao_ativa else 0.0
         tempo_inicio_vacinacao_anos = float(values['-tempo-vacinacao-']) if vacinacao_ativa else 0.0
         tempo_inicio_vacinacao_dias = tempo_inicio_vacinacao_anos * 365
-        tx_mortalidade = float(values['-mortalidade-']); #30% dos hospitalizados falecem
 
+
+        # Parâmetros - Tempo em dias
+        t_incubacao = float(values['-incubacao-']) # 5.1
+        t_infeccao = float(values['-infeccao-']) # 3.3
+        t_imunidade_natural = float(values['-imunidadeNatural-']) # 365
+        t_imunidade_vacinados = float(values['-imunidadeVacinados-']) 
+
+        # Parâmetros - Taxas diárias
+        tx_internacao = float(values['-internacao-']) # 0.05
+        tx_mortalidade_hospitalizados = float(values['-mortalidadeHospitalizados-']); #30% dos hospitalizados falecem
+        tx_mortalidade_infectados = float(values['-mortalidadeInfectados-']); 
+        tx_mortalidade_natural = float(values['-mortalidadeNatural-']); 
+        tx_efetividade = float(values['-taxa-efetividade-']) if vacinacao_ativa else 0.0
+        tx_vacinacao = float(values['-taxa-vacinacao-']) if vacinacao_ativa else 0.0 # 0.2% da população é vacinada por dia
+                
         # Número de Reprodução Básica.
         R0 = float(values['-repr-']) # 2.5
 
         # População
         N = int(values['-popsize-']) # 20000000
+
+        # Aumento Populacional - diário
+        aumento_populacional_diario = float(values['-aumentoPopulacao-'])
 
         # Nivel de distanciamento social.
         # 0.0 - Interação social sem restrições;
@@ -229,14 +241,14 @@ while True:
         u = float(values['-distance-']) # 0.2
 
         # Parâmetros da modelagem SEIHRVS.
-        params = {'R0': R0, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade), 'Mu':tx_mortalidade, 'Omega':1/t_imunidade, 'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
+        params = {'R0': R0, 'Epsilon': aumento_populacional_diario ,'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/t_imunidade_natural, 'OmegaV':1/t_imunidade_vacinados,'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
         ICU = (float(values['-uti-'])/10000)*N
         f = lambda t, x, u : SEIHRVS_MODEL(x, params, N, u, t, ICU)
 
         # Condições iniciais do modelo.
         e0 = int(values['-E0-']);
-        i0 = int(values['I0-']);
+        i0 = int(values['-I0-']);
         h0 = int(values['-H0-']);
         r0 = int(values['-R0-']);
         v0 = int(values['-V0-']);
