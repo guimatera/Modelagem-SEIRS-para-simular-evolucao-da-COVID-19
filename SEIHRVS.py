@@ -78,7 +78,10 @@ right_col = [
     [sg.Slider(range=(0,10), default_value=2, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-tempo-vacinacao-')],
     [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-     font=(font_style, 8),key='-lockdown-')]
+    font=(font_style, 8),key='-lockdown-')],
+    [sg.Text('Taxa de ocupação limite de leitos: ')],
+    [sg.Slider(range=(0,1), default_value=0.5, resolution=0.01,
+    size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-icu-condicao-')],
 ]
            
 layout = [
@@ -157,6 +160,7 @@ while True:
             # Para criar o vetor com dados da variação do número de reprodução básica ao longo do tempo.
             r0 = params["R0"]
             rt = [r0]
+            icu_condicao = float(values['-icu-condicao-'])
 
             # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
             tau = params["tau"]
@@ -165,7 +169,7 @@ while True:
             mes = 30
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > 0.5*ICU and values['-lockdown-'] == 'Yes':
+                if x[3,k] > icu_condicao and values['-lockdown-'] == 'Yes':
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
                     while count < mes/dt:
@@ -240,10 +244,11 @@ while True:
         # 1.0 - Isolamento total(ideal).
         u = float(values['-distance-']) # 0.2
 
+        ICU = (float(values['-uti-'])/10000)*N
+
         # Parâmetros da modelagem SEIHRVS.
         params = {'R0': R0, 'Epsilon': aumento_populacional_diario ,'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/t_imunidade_natural, 'OmegaV':1/t_imunidade_vacinados,'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
-        ICU = (float(values['-uti-'])/10000)*N
         f = lambda t, x, u : SEIHRVS_MODEL(x, params, N, u, t, ICU)
 
         # Condições iniciais do modelo.
