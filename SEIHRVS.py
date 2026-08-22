@@ -9,7 +9,8 @@ sg.theme('Default1')
 # Criando layout da interface gráfica.   
 font_size = 7
 font_style = 'Helvetica'
-left_col = [  
+left_col = [ 
+            [sg.Text('Parâmetros Gerais:')], 
             [sg.Text('Tamanho da população:')],
             [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
@@ -82,13 +83,12 @@ right_col = [
     [sg.Text('Taxa de ocupação limite de leitos: ')],
     [sg.Slider(range=(0,1), default_value=0.5, resolution=0.01,
     size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-icu-condicao-')],
-    [sg.Text('Método Numérico: ')],
-    [sg.Combo(['Runge_Kutta', 'Euler'], default_value='Runge Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
 ]
            
 layout = [
     [
-        [sg.Text('Modelagem SEIHRVS - Parâmetros:')],
+        [sg.Text('Método Numérico: ')],
+        [sg.Combo(['Runge_Kutta', 'Euler'], default_value='Runge Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
         sg.Column(left_col, vertical_alignment='top'), 
         sg.Column(middle_col, vertical_alignment='top'),
         sg.Column(right_col, vertical_alignment='top'),
