@@ -82,6 +82,8 @@ right_col = [
     [sg.Text('Taxa de ocupação limite de leitos: ')],
     [sg.Slider(range=(0,1), default_value=0.5, resolution=0.01,
     size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-icu-condicao-')],
+    [sg.Text('Método Numérico: ')],
+    [sg.Combo(['Runge_Kutta', 'Euler'], default_value='Runge Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
 ]
            
 layout = [
@@ -202,10 +204,56 @@ while True:
                     x[:,k+1] = x[:,k] + dx
 
                     # Cálculo da variação do número de reprodução ao longo do tempo.
-                    rt.append(r0*((1-tau)*x[0,k]/N))
+                    rt.append(r0*((1-tau)*x[0,k]/N))    
+                    k += 1   
+            return x, t, rt, icu
 
-                    k += 1
-        
+        # Método euler para computar a evolução das EDO´s ao longo do tempo.
+        def euler_lockdown(f, x0, t0, tf, dt, params, N):
+            t = np.arange(t0,tf,dt)
+            nt = t.size
+            nx = x0.size
+            x = np.zeros([nx,nt])
+            
+            x[:,0] = x0
+             
+            # Em média, 1 a cada 20 pessoas infectadas com a COVID-19 necessita de uma UTI.
+            # O Brasil, durante os piores momentos da pandemia, disponibizou 1 UTI para cada 10000 habitantes do país.
+            # Para calcular a capacidade das UTIs ao longo do tempo.
+            ICU = (float(values['-uti-'])/10000)*N
+            icu = [ICU]*nt
+
+            # Para criar o vetor com dados da variação do número de reprodução básica ao longo do tempo.
+            r0 = params["R0"]
+            rt = [r0]
+            icu_condicao = float(values['-icu-condicao-'])
+
+            # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
+            tau = params["tau"]
+
+            k = 0
+            mes = 30
+            while k < nt-1:
+                # Condições para um lockdown de emergência seja acionado.
+                if x[3,k] > icu_condicao and values['-lockdown-'] == 'Yes':
+                    count = 1
+                    # Um Lockdown de emergência dura 1 mês nessa simulação. 
+                    while count < mes/dt:
+                        if  k == nt-1:
+                            break
+                        tau = 0.7
+                        x[:,k+1] = (x[:,k] + dt*f(t[k],x[:,k],tau))
+
+                        # Cálculo da variação do número básico de reprodução ao longo do tempo.
+                        rt.append(r0*((1-tau)*x[0,k]/N))
+                        count += 1
+                        k += 1
+                else:       
+                    tau = params["tau"]
+                    x[:,k+1] = (x[:,k] + dt*f(t[k],x[:,k], tau))
+                    # Cálculo da variação do número de reprodução ao longo do tempo.
+                    rt.append(r0*((1-tau)*x[0,k]/N))    
+                    k += 1       
             return x, t, rt, icu
 
 
@@ -265,16 +313,19 @@ while True:
         tf = 365*int(values['-time-'])
         dt = 1
 
-        # Cálculo de Runge-Kutta.
-        x,t,rt,icu =  RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params,N)
-
+        if values['-numerical-methods-'] == "Runge-Kutta":
+            # Cálculo de Runge-Kutta.
+            x,t,rt,icu =  RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
+        else:
+            # Cálculo de Euler
+            x,t,rt,icu =  euler_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
 
         # Plotando dos gráficos.
         fig, ax = plt.subplots(2, 1)
         
         # Gráfico da simulação epidemiológica SEIHRVS.
         model_name = 'SEIHRVS' if vacinacao_ativa else 'SEIHRS'
-        ax[0].set_title(f'Simulação epidemiológica {model_name}')
+        ax[0].set_title(f'Simulação epidemiológica {model_name} - {values['-numerical-methods-']}')
         ax[0].plot(t/365, x[0,:], 'r', label = 'S')
         ax[0].plot(t/365, x[1,:], 'g', label = 'E')
         ax[0].plot(t/365, x[2,:], 'b', label = 'I')
