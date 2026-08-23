@@ -2,6 +2,7 @@
 import PySimpleGUI as sg
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.integrate import odeint
 
 # Definindo tema da interface gráfica.
 sg.theme('Default1')  
@@ -109,7 +110,7 @@ while True:
     if event == 'Ok':
 
         # Função que define as EDO's da modelagem SEIHRVS para uma epidemia.
-        def SEIHRVS_MODEL(x, params, N, u, t, ICU):
+        def SEIHRVS_MODEL(x, t, params, N, u, ICU):
             # Coleta de parâmetros
             alpha = params["Alpha"]
             beta = params["Beta"]
@@ -124,7 +125,6 @@ while True:
             epsilon = params["Epsilon"]
             e = params["e"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
             v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
-
             tau = params["tau"]
 
             # Decisão entre parâmetro tau inicial ou parâmetro tau de Lockdown
@@ -297,21 +297,21 @@ while True:
         # Parâmetros da modelagem SEIHRVS.
         params = {'R0': R0, 'Epsilon': aumento_populacional_diario ,'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/t_imunidade_natural, 'OmegaV':1/t_imunidade_vacinados,'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
-        f = lambda t, x, u : SEIHRVS_MODEL(x, params, N, u, t, ICU)
+        f = lambda t, x, u : SEIHRVS_MODEL(x, t, params, N, u, ICU)
 
         # Condições iniciais do modelo.
-        e0 = int(values['-E0-']);
-        i0 = int(values['-I0-']);
-        h0 = int(values['-H0-']);
-        r0 = int(values['-R0-']);
-        v0 = int(values['-V0-']);
+        e0 = int(values['-E0-'])
+        i0 = int(values['-I0-'])
+        h0 = int(values['-H0-'])
+        r0 = int(values['-R0-'])
+        v0 = int(values['-V0-'])
         s0 = N - e0 -i0 - r0 - h0 - v0
         SEIHRVS_0 = np.array([s0,e0,i0,h0,r0,v0])
 
         # Tempo de simulação e passo.
         t0 = 0
         tf = 365*int(values['-time-'])
-        dt = 1
+        dt = 0.01
 
         if values['-numerical-methods-'] == "Runge-Kutta":
             # Cálculo de Runge-Kutta.
@@ -320,6 +320,21 @@ while True:
             # Cálculo de Euler
             x,t,rt,icu =  euler_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
 
+        x_odeint = odeint(SEIHRVS_MODEL, SEIHRVS_0, t, args=(params, N, u, ICU))
+            # Recebendo arrays resultados dos métodos de Euler, Runge-Kutta(quarta ordem) e ODEINT.
+                                  
+        symbol = ['S','E','I','H','R','V']
+        print("Passo utilizado(h): ", dt)
+        print('\n')
+            
+        # Calculando o erro quadrático médio do método numérico selecionado utilizando ODEINT como valor de referência.
+        msr = []
+        for i in range(0, 6):
+            msr.append(((x[i,:] - x_odeint[:,i])**2).mean(axis=None))
+            txt = f"Erro quadrático médio {symbol[i]} - {values['-numerical-methods-']} e ODEINT: "
+            print(txt, msr[i])
+        print()
+        
         # Plotando dos gráficos.
         fig, ax = plt.subplots(2, 1)
         
