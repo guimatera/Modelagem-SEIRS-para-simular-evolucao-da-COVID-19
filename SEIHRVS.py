@@ -16,7 +16,7 @@ left_col = [
             [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
             [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):')],
-            [sg.Slider(range=(0,2e6), default_value=1000, resolution=1,
+            [sg.Slider(range=(-2e5,2e5), default_value=1000, resolution=1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-aumentoPopulacao-')], 
             [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
