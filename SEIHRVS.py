@@ -16,7 +16,7 @@ left_col = [
             [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
             [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):')],
-            [sg.Slider(range=(0,2e6), default_value=10000, resolution=1,
+            [sg.Slider(range=(0,2e6), default_value=1000, resolution=1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-aumentoPopulacao-')], 
             [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
@@ -37,11 +37,11 @@ left_col = [
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-incubacao-')], 
             [sg.Text('Período de infecção(dias): '), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-infeccao-')],
-            [sg.Text('Período de imunidade(dias) - Recuperados: '), sg.Slider(range=(0,730), default_value=365, resolution=1,
+            [sg.Text('Período de imunidade(anos) - Recuperados: '), sg.Slider(range=(0,20), default_value=1, resolution=0.5,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeNatural-')],
-            [sg.Text('Período de imunidade(dias) -  Vacinados: '), sg.Slider(range=(0,730), default_value=365, resolution=1,
+            [sg.Text('Período de imunidade(anos) -  Vacinados: '), sg.Slider(range=(0,20), default_value=5, resolution=0.5,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeVacinados-')],
-            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,0.1), default_value=0.001, resolution=0.001,
+            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,1e-4), default_value=2e-5, resolution=1e-5,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeNatural-')],
             [sg.Text('Taxa de mortalidade de Infectados(dias): '), sg.Slider(range=(0,1), default_value=0.1, resolution=0.01,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
@@ -61,7 +61,7 @@ middle_col = [
     [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-H0-')],
     [sg.Text('Pessoas Vacinadas:')],
-    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
+    [sg.Slider(range=(0,2e8), default_value=0, resolution=1,
     size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-V0-')],
     [sg.Text('Pessoas Recuperadas:')],
     [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
@@ -81,6 +81,9 @@ right_col = [
     size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-tempo-vacinacao-')],
     [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
     font=(font_style, 8),key='-lockdown-')],
+    [sg.Text('Duração do lockdown de emergência(dias):')],
+    [sg.Slider(range=(0,60), default_value=30, resolution=1,
+    size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-duracao-lockdown-')],
     [sg.Text('Taxa de ocupação limite de leitos: ')],
     [sg.Slider(range=(0,1), default_value=0.5, resolution=0.01,
     size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-icu-condicao-')],
@@ -89,8 +92,8 @@ right_col = [
 layout = [
     [
         [sg.Text('Método Numérico: ')],
-        [sg.Combo(['Runge_Kutta', 'Euler'], default_value='Runge Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
-        sg.Column(left_col, vertical_alignment='top'), 
+        [sg.Combo(['Runge-Kutta', 'Euler'], default_value='Runge-Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
+        sg.Column(left_col, vertical_alignment='top'),
         sg.Column(middle_col, vertical_alignment='top'),
         sg.Column(right_col, vertical_alignment='top'),
     ],
@@ -135,12 +138,17 @@ while True:
             sobrecapacidade_uti = x[3] > ICU
 
             # Array com Edos do modelo.
+            mortes_naturais = pi * (x[0] + x[1] + x[2] + x[3] + x[4] + x[5])
+            mortes_doenca = muI*x[2] + muH*x[3] + (delta*x[2] if sobrecapacidade_uti else 0.0)
+
             SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omegaR*x[4] - pi*x[0] - fluxo_vacinacao + epsilon, #dS/dt
                             (1-amort)*(beta*x[0]*x[2]/N) - (alpha + pi)*x[1], #dE/dt
                             alpha*x[1] - (gammaI + delta + pi + muI)*x[2] , #dI/dt
                             delta*x[2] - (gammaH + muH + pi)*x[3] if not sobrecapacidade_uti else -(gammaH + muH + pi)*x[3], #dH/dt
                             gammaI*x[2] + gammaH*x[3] - (omegaR + pi)*x[4], #dR/dt
-                            fluxo_vacinacao  #dV/dt
+                            fluxo_vacinacao,  #dV/dt
+                            mortes_naturais,
+                            mortes_doenca
                             ]) 
             return SEIHRVSdot
 
@@ -166,15 +174,16 @@ while True:
 
             # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
             tau = params["tau"]
-
+            lockdown_times = 0
             k = 0
-            mes = 30
+            duracao_lockdown = float(values['-duracao-lockdown-'])
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
                 if x[3,k] > icu_condicao and values['-lockdown-'] == 'Yes':
+                    lockdown_times += 1
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
-                    while count < mes/dt:
+                    while count < duracao_lockdown/dt:
                         if  k == nt-1:
                             break
                         tau = 0.7
@@ -206,7 +215,7 @@ while True:
                     # Cálculo da variação do número de reprodução ao longo do tempo.
                     rt.append(r0*((1-tau)*x[0,k]/N))    
                     k += 1   
-            return x, t, rt, icu
+            return x, t, rt, icu, lockdown_times
 
         # Método euler para computar a evolução das EDO´s ao longo do tempo.
         def euler_lockdown(f, x0, t0, tf, dt, params, N):
@@ -232,13 +241,15 @@ while True:
             tau = params["tau"]
 
             k = 0
-            mes = 30
+            duracao_lockdown = float(values['-duracao-lockdown-'])
+            lockdown_times = 0
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
                 if x[3,k] > icu_condicao and values['-lockdown-'] == 'Yes':
+                    lockdown_times += 1
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
-                    while count < mes/dt:
+                    while count < duracao_lockdown/dt:
                         if  k == nt-1:
                             break
                         tau = 0.7
@@ -254,7 +265,7 @@ while True:
                     # Cálculo da variação do número de reprodução ao longo do tempo.
                     rt.append(r0*((1-tau)*x[0,k]/N))    
                     k += 1       
-            return x, t, rt, icu
+            return x, t, rt, icu, lockdown_times
 
 
         # Helpers de Vacinação
@@ -295,7 +306,7 @@ while True:
         ICU = (float(values['-uti-'])/10000)*N
 
         # Parâmetros da modelagem SEIHRVS.
-        params = {'R0': R0, 'Epsilon': aumento_populacional_diario ,'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/t_imunidade_natural, 'OmegaV':1/t_imunidade_vacinados,'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
+        params = {'R0': R0, 'Epsilon': aumento_populacional_diario ,'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/(t_imunidade_natural*365), 'OmegaV':1/(t_imunidade_vacinados*365),'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
         f = lambda t, x, u : SEIHRVS_MODEL(x, t, params, N, u, ICU)
 
@@ -306,26 +317,48 @@ while True:
         r0 = int(values['-R0-'])
         v0 = int(values['-V0-'])
         s0 = N - e0 -i0 - r0 - h0 - v0
-        SEIHRVS_0 = np.array([s0,e0,i0,h0,r0,v0])
+        SEIHRVS_0 = np.array([s0,e0,i0,h0,r0,v0, 0.0, 0.0])
 
         # Tempo de simulação e passo.
         t0 = 0
         tf = 365*int(values['-time-'])
-        dt = 0.01
+        dt = 1
 
         if values['-numerical-methods-'] == "Runge-Kutta":
             # Cálculo de Runge-Kutta.
-            x,t,rt,icu =  RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
+            x,t,rt,icu,lockdown_times =  RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
         else:
             # Cálculo de Euler
-            x,t,rt,icu =  euler_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
+            x,t,rt,icu,lockdown_times =  euler_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
 
         x_odeint = odeint(SEIHRVS_MODEL, SEIHRVS_0, t, args=(params, N, u, ICU))
             # Recebendo arrays resultados dos métodos de Euler, Runge-Kutta(quarta ordem) e ODEINT.
                                   
         symbol = ['S','E','I','H','R','V']
+
+        print("RELATÓRIO DE SIMULAÇÃO")
+        print("==================================================")
+        print("Vacinação: ", vacinacao_ativa)
+        if(vacinacao_ativa):
+            print("Tempo de início da vacinação: {:.1f} anos".format(tempo_inicio_vacinacao_anos))
+        print("LockDown: ", values['-lockdown-'])
+        if(values['-lockdown-'] == 'Yes'):
+            print("Número de vezes que o lockdown foi acionado: ", lockdown_times)
+        print('Quantidade de leitos de UTI disponíveis: {}'.format(int(ICU)))
         print("Passo utilizado(h): ", dt)
-        print('\n')
+        print("Método numérico utilizado: ", values['-numerical-methods-'])
+        print("==================================================")
+        print('Número total de óbitos ao final da simulação: ', x[6,-1] + x[7,-1]) 
+        print('Número total de óbitos por causas naturais ao final da simulação: ', x[6,-1])
+        print('Número total de óbitos pela doença ao final da simulação: ', x[7,-1])
+        print('Número total de pessoas recuperadas ao final da simulação: ', x[4,-1])
+        print('Número total de pessoas vacinadas ao final da simulação: ', x[5,-1])
+        print('Número total de pessoas suscetíveis ao final da simulação: ', x[0,-1])
+        print('Número total de pessoas expostas ao final da simulação: ', x[1,-1])
+        print('Número total de pessoas infectadas ao final da simulação: ', x[2,-1])
+        print('Número de pessoas hospitalizadas ao final da simulação: ', x[3,-1])
+        print('Pico de pessoas hospitalizadas: ', max(x[3,:]))
+        print("==================================================")
             
         # Calculando o erro quadrático médio do método numérico selecionado utilizando ODEINT como valor de referência.
         msr = []
