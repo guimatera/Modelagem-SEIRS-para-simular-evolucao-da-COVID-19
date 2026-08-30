@@ -13,11 +13,14 @@ font_style = 'Helvetica'
 left_col = [ 
             [sg.Text('Parâmetros Gerais:')], 
             [sg.Text('Tamanho da população:')],
-            [sg.Slider(range=(0,8e9), default_value=2e8, resolution=10000,
+            [sg.Slider(range=(0,8e9), default_value=213421037, resolution=10000,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
-            [sg.Text('Aumento Populacional (Nascimentos + Saldo imigratório):')],
-            [sg.Slider(range=(-2e5,2e5), default_value=1000, resolution=1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-aumentoPopulacao-')], 
+            [sg.Text('Nascimentos')],
+            [sg.Slider(range=(0,2e5), default_value=1000, resolution=1,
+            size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-nascimentos-')], 
+            [sg.Text('Imigração:')],
+            [sg.Slider(range=(-2e5,2e5), default_value=100, resolution=1,
+            size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-imigracao-')], 
             [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
             size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-uti-')],
@@ -47,6 +50,8 @@ left_col = [
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
             [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeHospitalizados-')],
+            [sg.Text('Taxa de Infectados Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.01,
+            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-poisson-')],
 ]
 
 middle_col = [ 
@@ -125,9 +130,11 @@ while True:
             omegaR = params["OmegaR"]
             omegaV = params["OmegaV"]
             pi = params["Pi"]
-            epsilon = params["Epsilon"]
+            sigma = params["Sigma"]
+            epsillon = params["Epsillon"]
             e = params["e"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
             v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
+            p = params['p']
             tau = params["tau"]
 
             # Decisão entre parâmetro tau inicial ou parâmetro tau de Lockdown
@@ -141,9 +148,9 @@ while True:
             mortes_naturais = pi * (x[0] + x[1] + x[2] + x[3] + x[4] + x[5])
             mortes_doenca = muI*x[2] + muH*x[3] + (delta*x[2] if sobrecapacidade_uti else 0.0)
 
-            SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omegaR*x[4] - pi*x[0] - fluxo_vacinacao + epsilon, #dS/dt
+            SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omegaR*x[4] - pi*x[0] - fluxo_vacinacao + sigma + (1-p)*epsillon, #dS/dt
                             (1-amort)*(beta*x[0]*x[2]/N) - (alpha + pi)*x[1], #dE/dt
-                            alpha*x[1] - (gammaI + delta + pi + muI)*x[2] , #dI/dt
+                            alpha*x[1] - (gammaI + delta + pi + muI)*x[2] + p*epsillon, #dI/dt
                             delta*x[2] - (gammaH + muH + pi)*x[3] if not sobrecapacidade_uti else -(gammaH + muH + pi)*x[3], #dH/dt
                             gammaI*x[2] + gammaH*x[3] - (omegaR + pi)*x[4], #dR/dt
                             fluxo_vacinacao,  #dV/dt
@@ -179,7 +186,7 @@ while True:
             duracao_lockdown = float(values['-duracao-lockdown-'])
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > icu_condicao and values['-lockdown-'] == 'Yes':
+                if x[3,k] > icu_condicao*ICU and values['-lockdown-'] == 'Yes':
                     lockdown_times += 1
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
@@ -245,7 +252,7 @@ while True:
             lockdown_times = 0
             while k < nt-1:
                 # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > icu_condicao and values['-lockdown-'] == 'Yes':
+                if x[3,k] > icu_condicao*ICU and values['-lockdown-'] == 'Yes':
                     lockdown_times += 1
                     count = 1
                     # Um Lockdown de emergência dura 1 mês nessa simulação. 
@@ -287,6 +294,7 @@ while True:
         tx_mortalidade_natural = float(values['-mortalidadeNatural-']); 
         tx_efetividade = float(values['-taxa-efetividade-']) if vacinacao_ativa else 0.0
         tx_vacinacao = float(values['-taxa-vacinacao-']) if vacinacao_ativa else 0.0 # 0.2% da população é vacinada por dia
+        tx_casos_externos_infectados = float(values['-poisson-']);
                 
         # Número de Reprodução Básica.
         R0 = float(values['-repr-']) # 2.5
@@ -295,7 +303,8 @@ while True:
         N = int(values['-popsize-']) # 20000000
 
         # Aumento Populacional - diário
-        aumento_populacional_diario = float(values['-aumentoPopulacao-'])
+        nascimentos = float(values['-nascimentos-'])
+        imigracao = float(values['-imigracao-'])
 
         # Nivel de distanciamento social.
         # 0.0 - Interação social sem restrições;
@@ -306,7 +315,7 @@ while True:
         ICU = (float(values['-uti-'])/10000)*N
 
         # Parâmetros da modelagem SEIHRVS.
-        params = {'R0': R0, 'Epsilon': aumento_populacional_diario ,'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/(t_imunidade_natural*365), 'OmegaV':1/(t_imunidade_vacinados*365),'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
+        params = {'R0': R0, 'Sigma': nascimentos , 'Epsillon': imigracao, 'p': tx_casos_externos_infectados, 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/(t_imunidade_natural*365), 'OmegaV':1/(t_imunidade_vacinados*365),'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
         f = lambda t, x, u : SEIHRVS_MODEL(x, t, params, N, u, ICU)
 
