@@ -50,11 +50,11 @@ left_col = [
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
             [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeHospitalizados-')],
-            [sg.Text('Taxa de Suscetíveis Externos(dias): '), sg.Slider(range=(0,1), default_value=0.9998, resolution=0.01,
+            [sg.Text('Taxa de Suscetíveis Externos(dias): '), sg.Slider(range=(0,1), default_value=0.9998, resolution=0.0001,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-suscetíveisExternos-')],
-            [sg.Text('Taxa de Expostos Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.01,
+            [sg.Text('Taxa de Expostos Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-expostosExternos-')],
-            [sg.Text('Taxa de Recuperados Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.01,
+            [sg.Text('Taxa de Recuperados Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
             size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-recuperadosExternos-')],
 ]
 
