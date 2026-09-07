@@ -40,9 +40,19 @@ NOMES_MES_CURTO = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
 
 # Modelo de tendência:
 #   "exponencial" -> Decaimento Exponencial com assíntota: y = A*e^(Bx) + C
-#   "polinomial"  -> Melhor polinômio de grau 1 até MAX_GRAU_POLI
-MODELO_TENDENCIA = "exponencial"
-MAX_GRAU_POLI    = 5  # usado apenas quando MODELO_TENDENCIA = "polinomial"
+#   "senoide"     -> Senoide com amplitude envelopada por decaimento
+#                    exponencial OU logarítmico (ver ENVELOPE_SENOIDE):
+#                      envelope exponencial: y = C + A*e^(Bx)      * sin(wx+phi)
+#                      envelope logarítmico: y = C + A/ln(x+E)     * sin(wx+phi)
+#                    Pensado para séries com ciclos que vão se atenuando com o
+#                    tempo (ex.: nascimentos/óbitos), em vez de uma tendência
+#                    puramente monotônica.
+MODELO_TENDENCIA = "senoide"
+
+# Tipo de envelope da senoide (usado apenas quando MODELO_TENDENCIA = "senoide"):
+#   "exponencial" -> amplitude decai como A*e^(Bx),  B<0
+#   "logaritmica" -> amplitude decai como A/ln(x+E), E>1 (evita ln<=0 no domínio)
+ENVELOPE_SENOIDE = "exponencial"
 
 # Período opcionalmente descartado antes de interpolar e ajustar a tendência,
 # no formato (ano_inicial, ano_final_exclusivo). O padrão cobre o choque da
@@ -162,6 +172,109 @@ def ajustar_polinomial(x, y, max_grau):
     return melhor_mod, melhor_grau, melhor_r2
 
 
+# --- Senoide com envelope decrescente (exponencial ou logarítmico) --------
+
+# A oscilação é SAZONAL: um ciclo por ano, entre os meses (mais nascimentos em
+# mar/abr/mai, mais óbitos em mai/jun/jul/ago). Como x está em anos fracionários,
+# um ciclo anual corresponde a w = 2*pi fixo - a frequência não é ajustada, só a
+# fase (em que mês fica o pico), a amplitude e o envelope. Deixar w livre fazia o
+# ajuste cair em "ciclos" de vários anos, que não representam sazonalidade.
+w_anual = 2 * np.pi
+
+def _estimar_amplitude_fase(x, y, C0, w=w_anual):
+    """
+    Chute inicial de (amplitude, fase) na frequência fixa w. Como
+    a*sin(wx) + b*cos(wx) é LINEAR em (a, b), uma regressão linear simples já
+    dá a amplitude sqrt(a²+b²) e a fase atan2(b, a) que melhor descrevem a
+    sazonalidade dos dados - ponto de partida do ajuste não linear.
+    """
+    residuo  = y - C0
+    M        = np.column_stack([np.sin(w * x), np.cos(w * x)])
+    (a, b), *_ = np.linalg.lstsq(M, residuo, rcond=None)
+    return float(np.hypot(a, b)), float(np.arctan2(b, a))
+
+def mes_pico_senoide(phi):
+    """
+    Mês do ano (1-12) em que a senoide anual atinge o pico, dado o ângulo de
+    fase ajustado. O pico de sin(2*pi*x + phi) ocorre em x = 1/4 - phi/(2*pi),
+    e o x fracionário se converte em mês pela mesma regra de mes_para_frac:
+    frac = (mes - 0.5)/12.
+    """
+    frac_pico = ((np.pi / 2 - phi) / w_anual) % 1.0
+    mes       = int(round(frac_pico * 12 + 0.5))
+    return max(1, min(12, mes))
+
+def _estimar_modulacao_fase(x, y, nivel):
+    """
+    Chute inicial de (m, phi) da modulação sazonal RELATIVA: divide os dados
+    pelo nível ajustado e mede a oscilação residual (y/nivel - 1) na frequência
+    anual. Trabalhar em termos relativos mantém a sazonalidade proporcional ao
+    nível, que é o que encolhe junto com o envelope.
+    """
+    nivel   = np.where(np.abs(nivel) < 1e-9, 1e-9, nivel)
+    relativo = y / nivel - 1.0
+    m0, phi0 = _estimar_amplitude_fase(x, relativo, 0.0)
+    return float(np.clip(m0, -0.9, 0.9)), phi0
+
+def ajustar_senoide_exponencial(x, y):
+    """
+    Ajuste via curve_fit: y = (A*e^(Bx) + C) * (1 + m*sin(2*pi*x + phi)).
+
+    O nível A*e^(Bx)+C é a exponencial DECRESCENTE (B<0) que envelopa a
+    senoide: a oscilação sazonal (ciclo fixo de 12 meses) tem amplitude
+    m*(A*e^(Bx)+C), ou seja, encolhe junto com a tendência.
+    """
+    def _func(xv, A, B, C, m, phi):
+        return (A * np.exp(B * xv) + C) * (1 + m * np.sin(w_anual * xv + phi))
+
+    # 1) nivel: reaproveita o ajuste exponencial puro como ponto de partida
+    (A0, B0, C0), _func_exp = ajustar_exponencial(x, y)
+    # 2) sazonalidade: medida sobre o residuo relativo ao nivel
+    m0, phi0 = _estimar_modulacao_fase(x, y, _func_exp(x, A0, B0, C0))
+
+    bounds = ([-np.inf, -1.0, 0.0,    -1.0, -np.pi],
+              [ np.inf,  0.0, np.inf,  1.0,  np.pi])
+    try:
+        popt, _ = curve_fit(_func, x, y, p0=[A0, B0, C0, m0, phi0],
+                            bounds=bounds, maxfev=60000)
+    except RuntimeError:
+        # Fallback: mantem o nivel exponencial e a sazonalidade estimada
+        # linearmente, se o ajuste conjunto nao convergir.
+        popt = np.array([A0, B0, C0, m0, phi0])
+    return popt, _func
+
+def ajustar_senoide_logaritmica(x, y):
+    """
+    Ajuste via curve_fit: y = (A - B*ln(x + E)) * (1 + m*sin(2*pi*x + phi)).
+
+    Aqui o envelope é a função LOGARÍTMICA A - B*ln(x+E): B>0 dá o envelope
+    decrescente (caso dos nascimentos); B<0 deixa o nível crescer no mesmo
+    formato logarítmico, necessário para séries em alta (caso dos óbitos, que
+    sobem no período). Sem essa liberdade o ajuste degenerava em nível
+    constante e perdia toda a tendência. E>1 mantém ln(x+E)>0 no domínio (x>=0).
+    """
+    def _func(xv, A, B, E, m, phi):
+        return (A - B * np.log(xv + E)) * (1 + m * np.sin(w_anual * xv + phi))
+
+    # 1) nivel: regressao linear de y contra ln(x+E0) (linear em A e B)
+    E0    = np.e
+    M     = np.column_stack([np.ones_like(x), -np.log(x + E0)])
+    (A0, B0), *_ = np.linalg.lstsq(M, y, rcond=None)
+    A0, B0 = float(A0), float(B0)
+    nivel0 = A0 - B0 * np.log(x + E0)
+    # 2) sazonalidade sobre o residuo relativo
+    m0, phi0 = _estimar_modulacao_fase(x, y, nivel0)
+
+    bounds = ([-np.inf, -np.inf, 1.05, -1.0, -np.pi],
+              [ np.inf,  np.inf, 50.0,  1.0,  np.pi])
+    try:
+        popt, _ = curve_fit(_func, x, y, p0=[A0, B0, E0, m0, phi0],
+                            bounds=bounds, maxfev=60000)
+    except RuntimeError:
+        popt = np.array([A0, B0, E0, m0, phi0])
+    return popt, _func
+
+
 # =============================================================================
 # 3. ANÁLISE COMPLETA DE UM CSV
 # =============================================================================
@@ -170,7 +283,7 @@ def analisar_csv(arquivo,
                  separador=SEPARADOR_CSV,
                  anos_previsao=QUANTIDADE_ANOS_PREVISAO,
                  modelo=MODELO_TENDENCIA,
-                 max_grau=MAX_GRAU_POLI,
+                 envelope=ENVELOPE_SENOIDE,
                  excluir_periodo=EXCLUIR_PERIODO_PADRAO):
     """
     Interpolação (CubicSpline) + tendência + projeção futura de um CSV.
@@ -246,19 +359,49 @@ def analisar_csv(arquivo,
             f"Equacao: y = {A_fit:.2e} * e^({B_fit:.5f} * (Ano - {ano_base})) + {C_fit:.2e}",
             f"Assintota (C) = {C_fit:,.0f}".replace(",", "."),
         ]
+    elif modelo == "senoide":
+        if envelope == "exponencial":
+            popt, _func_sen = ajustar_senoide_exponencial(x, y)
+            A_fit, B_fit, C_fit, m_fit, phi_fit = popt
+            rotulo_modelo = "Senoide Sazonal com Envelope Exponencial"
+            equacao = (
+                f"Equacao: y = ({A_fit:.2e}*e^({B_fit:.5f}*(Ano-{ano_base})) + {C_fit:.2e})"
+                f" * (1 + {m_fit:.4f}*sin(2*pi*(Ano-{ano_base})+{phi_fit:.3f}))"
+            )
+        elif envelope == "logaritmica":
+            popt, _func_sen = ajustar_senoide_logaritmica(x, y)
+            A_fit, B_fit, E_fit, m_fit, phi_fit = popt
+            rotulo_modelo = "Senoide Sazonal com Envelope Logaritmico"
+            equacao = (
+                f"Equacao: y = ({A_fit:.2e} - {B_fit:.2e}*ln((Ano-{ano_base})+{E_fit:.3f}))"
+                f" * (1 + {m_fit:.4f}*sin(2*pi*(Ano-{ano_base})+{phi_fit:.3f}))"
+            )
+        else:
+            raise ValueError(
+                f"ENVELOPE_SENOIDE invalido: '{envelope}'. Use 'exponencial' ou 'logaritmica'."
+            )
 
-    elif modelo == "polinomial":
-        mod_poly, grau_poly, r2_tend = ajustar_polinomial(x, y, max_grau)
+        # A modulacao ajustada pode sair negativa: isso apenas inverte a senoide
+        # (equivale a somar pi na fase). Normaliza antes de reportar o mes de
+        # pico, senao o pico e informado com 6 meses de erro.
+        fase_pico = phi_fit if m_fit >= 0 else phi_fit + np.pi
+        mes_pico  = mes_pico_senoide(fase_pico)
+        mes_vale  = mes_pico_senoide(fase_pico + np.pi)
+        descricao = [
+            equacao,
+            f"Ciclo sazonal de 12 meses  |  Pico em {NOMES_MES_CURTO[mes_pico-1]}  |  "
+            f"Vale em {NOMES_MES_CURTO[mes_vale-1]}  |  "
+            f"Amplitude sazonal = {abs(m_fit)*100:.1f}% do nivel",
+        ]
+
+        r2_tend = r2_score(y, _func_sen(x, *popt))
 
         def modelo_tendencia(xv):
-            return mod_poly(xv)
-
-        rotulo_modelo = f"Polinomio Grau {grau_poly}"
-        descricao = [f"Equacao: {mod_poly}"]
+            return _func_sen(xv, *popt)
 
     else:
         raise ValueError(
-            f"MODELO_TENDENCIA invalido: '{modelo}'. Use 'exponencial' ou 'polinomial'."
+            f"MODELO_TENDENCIA invalido: '{modelo}'. Use 'exponencial', 'polinomial' ou 'senoide'."
         )
 
     estimativa_futura = modelo_tendencia(x_futuros)
@@ -459,7 +602,7 @@ def main():
         separador=SEPARADOR_CSV,
         anos_previsao=QUANTIDADE_ANOS_PREVISAO,
         modelo=MODELO_TENDENCIA,
-        max_grau=MAX_GRAU_POLI,
+        envelope=ENVELOPE_SENOIDE,
     )
     print(resumo_texto(res))
     montar_figura(res)
