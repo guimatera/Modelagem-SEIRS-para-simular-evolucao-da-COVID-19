@@ -105,13 +105,9 @@ def abrir_janela_grafico(res):
         [sg.Text(res["col_valor"], font=(FONT_FAMILY, FONT_SIZE+1))], 
         [sg.Canvas(key="-TOOLBAR-", size=(largura_px, 40))],
         [sg.Canvas(key="-CANVAS-", size=(largura_px, altura_px))],
-        # O R2 em destaque e o do modelo REALMENTE plotado (curva roxa). Antes
-        # era fixo em "Regressao exponencial", que e apenas a referencia de
-        # comparacao e nao corresponde a curva desenhada.
+        # R2 da extrapolacao REALMENTE plotada (curva roxa).
         [sg.Text(f"R² - {res['rotulo_modelo']} (curva plotada): "
                  f"{res['r2_tendencia']:.4f}", font=(FONT_FAMILY, FONT_SIZE, "bold"))],
-        [sg.Text(f"R² - Regressão exponencial (referência, não plotada): "
-                 f"{res['r2_exponential_regression']:.4f}")],
         # Spline cubica INTERPOLA os pontos (passa por todos), entao R2=1 sempre:
         # e so uma confirmacao de que a interpolacao esta correta, nao uma metrica
         # de qualidade de ajuste.
