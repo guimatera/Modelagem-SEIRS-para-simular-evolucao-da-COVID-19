@@ -324,7 +324,7 @@ while True:
         ICU = (float(values['-uti-'])/10000)*N
 
         # Parâmetros da modelagem SEIHRVS.
-        params = {'R0': R0, 'Sigma': nascimentos , 'Epsillon': imigracao, 'zetaS': tx_suscetiveis_externos, 'zetaE': tx_expostos_externos, 'zetaR': tx_recuperados_externos , 'Alpha': 1/t_incubacao, 'Beta': R0*1/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/(t_imunidade_natural*365), 'OmegaV':1/(t_imunidade_vacinados*365),'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
+        params = {'R0': R0, 'Sigma': nascimentos , 'Epsillon': imigracao, 'zetaS': tx_suscetiveis_externos, 'zetaE': tx_expostos_externos, 'zetaR': tx_recuperados_externos , 'Alpha': 1/t_incubacao, 'Beta': R0*t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/(t_imunidade_natural*365), 'OmegaV':1/(t_imunidade_vacinados*365),'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
 
         f = lambda t, x, u : SEIHRVS_MODEL(x, t, params, N, u, ICU)
 
