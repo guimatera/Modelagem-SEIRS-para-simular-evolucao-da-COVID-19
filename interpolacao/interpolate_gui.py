@@ -22,6 +22,11 @@ FONT_SIZE      = 10
 TAMANHO_GRAFICO = (11, 5.2)  # polegadas (largura, altura) de cada figura
 DPI_GRAFICO     = 100        # pixels por polegada da figura
 
+# A lista de CSVs cresce junto com o numero de arquivos ate este limite; passando
+# dele, a coluna ganha altura fixa e barra de rolagem.
+LIMITE_ROLAGEM   = 12
+ALTURA_LINHA_CSV = 33   # px por checkbox (medido com Segoe UI 10)
+
 # Cada CSV marcado vira uma janela de gráfico separada, guardada aqui por caminho
 janelas_graficos = {}
 
@@ -53,10 +58,15 @@ def linhas_checkbox(arquivos, separador):
 
 
 def montar_janela_principal(arquivos, separador):
+    linhas = linhas_checkbox(arquivos, separador)
+    # Sem altura fixa a coluna se ajusta ao conteudo e nenhum CSV fica cortado,
+    # seja qual for a fonte. A altura fixa anterior (30 px por linha) era menor
+    # que a linha real (33 px), e o ultimo arquivo sumia sem barra de rolagem.
+    rolar = len(linhas) > LIMITE_ROLAGEM
     coluna_csvs = sg.Column(
-        linhas_checkbox(arquivos, separador),
-        scrollable=len(arquivos) > 10, vertical_scroll_only=True,
-        size=(520, min(260, max(60, 30 * len(arquivos) + 10))),
+        linhas,
+        scrollable=rolar, vertical_scroll_only=True,
+        size=(520, ALTURA_LINHA_CSV * LIMITE_ROLAGEM) if rolar else (None, None),
         expand_x=True,
     )
 
@@ -69,7 +79,7 @@ def montar_janela_principal(arquivos, separador):
     ]
 
     layout = [
-        [sg.Text("Interpolação e Tendência de Séries Temporais",
+        [sg.Text("Interpolação e Extrapolação de Séries Temporais",
                  font=(FONT_FAMILY, FONT_SIZE))], 
         [sg.Frame("Arquivos CSV", [[coluna_csvs]], expand_x=True)],
         [sg.Button("Marcar todos"), sg.Button("Limpar seleção")],
