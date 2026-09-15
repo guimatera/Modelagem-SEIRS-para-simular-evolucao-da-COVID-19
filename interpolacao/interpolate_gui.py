@@ -124,7 +124,8 @@ def abrir_janela_grafico(res):
         [sg.Text(f"R² - Spline cúbica (interpolação, sempre 1): {res['r2_spline']:.4f}")],
         [sg.Push(), sg.Button("Fechar", key=("-FECHAR-", arquivo))],
     ]
-    sufixo = " (sem COVID-19)" if res.get("excluir_periodo") else ""
+    periodos = res.get("excluir_periodo")
+    sufixo   = f" (sem {itp.descrever_periodos(periodos)})" if periodos else ""
     janela = sg.Window(f"Gráfico - {os.path.basename(arquivo)}{sufixo}", layout,
                        font=(FONT_FAMILY, FONT_SIZE), finalize=True, resizable=True)
 

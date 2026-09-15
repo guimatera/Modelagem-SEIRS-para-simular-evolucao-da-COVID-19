@@ -1,6 +1,7 @@
 import os
 import glob
 import calendar
+import textwrap
 import warnings
 import unicodedata
 
@@ -29,7 +30,7 @@ SEPARADOR_CSV    = ";"                                               # separador
 # Colunas lidas do cabecalho do CSV: 1a = periodo ("Marco/2015"), 2a = valor
 
 # Quantidade de anos a projetar no futuro
-QUANTIDADE_ANOS_PREVISAO = 10
+QUANTIDADE_ANOS_PREVISAO = 2
 
 MESES = {
     "janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4,
@@ -65,6 +66,15 @@ AMORTECER_TENDENCIA_HW = False
 PERIODO_COVID           = (2020.0, 2023.0)
 EXCLUIR_PERIODO_PADRAO  = None  # ou PERIODO_COVID, para o script já rodar sem COVID
 
+# Picos de surto nas séries de vacina, que não se repetem de um ano para o outro:
+# set/2016 (~2,5x um mês típico na 2ª dose) e o surto de sarampo de 2018-2019,
+# com campanhas e vacinação de bloqueio (ago/2019 chega a ~5x). Eles inclinam a
+# tendência do Holt-Winters para baixo a ponto de a projeção ficar negativa. Não
+# há opção na interface; para descartá-los ao rodar o script com um CSV de vacina,
+# use EXCLUIR_PERIODO_PADRAO = PERIODOS_SURTO_VACINA + [PERIODO_COVID].
+PERIODOS_SURTO_VACINA   = [(2016 + 8/12, 2016 + 9/12),   # set/2016
+                           (2018.0, 2020.0)]             # surto de sarampo
+
 
 # =============================================================================
 # 1. LEITURA DOS DADOS
@@ -73,6 +83,41 @@ EXCLUIR_PERIODO_PADRAO  = None  # ou PERIODO_COVID, para o script já rodar sem 
 def listar_csvs(diretorio=DIRETORIO_DADOS):
     """Retorna a lista ordenada dos CSVs disponíveis no diretório de dados."""
     return sorted(glob.glob(os.path.join(diretorio, "*.csv")))
+
+def unir_periodos(periodos):
+    """
+    Normaliza o período excluído: aceita None, um (ini, fim) ou uma lista deles e
+    devolve a lista ordenada, com os trechos encostados ou sobrepostos fundidos.
+    """
+    if not periodos:
+        return []
+    if np.isscalar(periodos[0]):
+        periodos = [periodos]
+    unidos = []
+    for ini, fim in sorted(periodos):
+        if unidos and ini <= unidos[-1][1] + 1e-9:
+            unidos[-1] = (unidos[-1][0], max(unidos[-1][1], fim))
+        else:
+            unidos.append((ini, fim))
+    return unidos
+
+def _dentro_dos_periodos(x, periodos):
+    """Máscara dos x (ano fracionário) que caem em algum dos períodos."""
+    x = np.asarray(x, dtype=float)
+    dentro = np.zeros(x.shape, dtype=bool)
+    for ini, fim in periodos:
+        dentro |= (x >= ini) & (x < fim)
+    return dentro
+
+def descrever_periodos(periodos):
+    """[(2016.67, 2016.75), (2018, 2023)] -> 'Set/2016; Jan/2018 - Dez/2022'."""
+    textos = []
+    for ini, fim in unir_periodos(periodos):
+        # meio mês para dentro de cada borda, para o erro de float não cair no
+        # mês vizinho (2016 + 8/12 pode sair 2016.66666...)
+        de, ate = frac_para_mes_ano(ini + 1/24, 0), frac_para_mes_ano(fim - 1/24, 0)
+        textos.append(de if de == ate else f"{de} - {ate}")
+    return "; ".join(textos)
 
 def ler_colunas(arquivo, separador=SEPARADOR_CSV):
     """Lê o cabeçalho do CSV: 1a coluna = período, 2a coluna = valor."""
@@ -290,16 +335,17 @@ def analisar_csv(arquivo,
     """
     Interpolação (CubicSpline) + extrapolação (Holt-Winters) de um CSV.
     Retorna um dicionário com os dados, os modelos e as métricas do arquivo.
+    excluir_periodo: None, um (ini, fim) ou uma lista deles.
     """
     col_periodo, col_valor = ler_colunas(arquivo, separador)
     x_mensal, y_mensal = carregar_dados_mensais(arquivo, separador, col_periodo, col_valor)
 
-    # Descarta o período excluído (ex.: choque da COVID-19). Os pontos saem da
-    # spline e do ajuste, mas continuam guardados para aparecer no gráfico.
+    # Descarta os períodos excluídos (ex.: choque da COVID-19, picos de surto). Os
+    # pontos saem da spline e do ajuste, mas continuam guardados para o gráfico.
+    periodos   = unir_periodos(excluir_periodo)
     x_excluido = y_excluido = np.array([])
-    if excluir_periodo:
-        ini, fim = excluir_periodo
-        dentro   = (x_mensal >= ini) & (x_mensal < fim)
+    if periodos:
+        dentro = _dentro_dos_periodos(x_mensal, periodos)
         x_excluido, y_excluido = x_mensal[dentro], y_mensal[dentro]
         x_mensal,   y_mensal   = x_mensal[~dentro], y_mensal[~dentro]
 
@@ -370,7 +416,7 @@ def analisar_csv(arquivo,
         "y_mensal":          y_mensal,
         "x_excluido":        x_excluido,
         "y_excluido":        y_excluido,
-        "excluir_periodo":   excluir_periodo,
+        "excluir_periodo":   periodos,          # lista de (ini, fim), vazia se nenhum
         "ano_base":          ano_base,
         "x":                 x,
         "y":                 y,
@@ -417,10 +463,9 @@ def resumo_texto(res, incluir_previsao=True):
         f"Pontos mensais: {len(res['x_mensal'])}",
     ]
     if res.get("excluir_periodo"):
-        ini, fim = res["excluir_periodo"]
         linhas.append(
-            f"Periodo excluido: {frac_para_mes_ano(ini, 0)} - "
-            f"{frac_para_mes_ano(fim - 1/12, 0)}  ({len(res['y_excluido'])} meses fora do ajuste)"
+            f"Periodo excluido: {descrever_periodos(res['excluir_periodo'])}  "
+            f"({len(res['y_excluido'])} meses fora do ajuste)"
         )
     linhas += [
         "",
@@ -452,6 +497,9 @@ def formata_tooltip(sel):
     divide pelos dias daquele mês (28 a 31), e não por 365.
     """
     x_real, y_val = sel.target[0], sel.target[1]
+    reais = getattr(sel.artist, "valores_reais", None)  # pontos presos na borda do eixo
+    if reais is not None:
+        y_val = reais[sel.index]
     ano, mes = ano_mes(x_real)
     dias     = calendar.monthrange(ano, mes)[1]  # ja considera ano bissexto
     sel.annotation.set_text(
@@ -481,18 +529,42 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     x_plot = np.arange(x[0], x[-1], 1/365)
     y_plot = res["spline"](x_plot)
     x_fut  = np.arange(x[-1], res["x_futuros"][-1] + 1/365, 1/365)
+    y_fut  = res["modelo_tendencia"](x_fut)
 
     # Dentro do período excluído a spline não tem dado nenhum para interpolar e
     # dispara (chega a superar o pico real). NaN interrompe a linha ali.
-    if res.get("excluir_periodo"):
-        ini, fim = res["excluir_periodo"]
-        y_plot = np.where(((x_plot + ano_base) >= ini) & ((x_plot + ano_base) < fim),
-                          np.nan, y_plot)
-        ax.scatter(res["x_excluido"], res["y_excluido"],
+    periodos = res.get("excluir_periodo")
+    if periodos:
+        y_plot = np.where(_dentro_dos_periodos(x_plot + ano_base, periodos), np.nan, y_plot)
+
+    # Escala do eixo y pelo que entra no modelo (dados usados, spline e projeção),
+    # com a mesma folga de 5% do autoscale. Um pico no período excluído - 1,97 mi
+    # em ago/2019 nas vacinas, ~5x um mês típico - esticava o eixo e espremia todo
+    # o resto no rodapé do gráfico.
+    usados       = np.concatenate([res["y_mensal"], y_plot[np.isfinite(y_plot)],
+                                   res["estimativa_futura"], y_fut])
+    folga        = 0.05 * (usados.max() - usados.min())
+    y_min, y_max = usados.min() - folga, usados.max() + folga
+
+    if periodos:
+        x_exc, y_exc = res["x_excluido"], res["y_excluido"]
+        dentro = (y_exc >= y_min) & (y_exc <= y_max)
+        ax.scatter(x_exc[dentro], y_exc[dentro],
                    facecolors="none", edgecolors="gray", zorder=4, s=22,
-                   label=f"Excluidos ({frac_para_mes_ano(ini, 0)} - "
-                         f"{frac_para_mes_ano(fim - 1/12, 0)})")
-        ax.axvspan(ini, fim, color="gray", alpha=0.08, zorder=0)
+                   label=f"Excluidos ({descrever_periodos(periodos)})")
+        # Excluídos fora da escala: triângulo preso na borda; o tooltip mostra o
+        # valor real (formata_tooltip lê `valores_reais`)
+        for fora, borda, marcador, rotulo in (
+                (y_exc > y_max, y_max, "^", "acima da escala, ate"),
+                (y_exc < y_min, y_min, "v", "abaixo da escala, ate")):
+            if fora.any():
+                extremo = y_exc[fora].max() if marcador == "^" else y_exc[fora].min()
+                pontos  = ax.scatter(x_exc[fora], np.full(fora.sum(), borda), marker=marcador,
+                                     color="gray", zorder=4, s=30, clip_on=False,
+                                     label=f"Excluidos {rotulo} {formata_numero(extremo)}")
+                pontos.valores_reais = y_exc[fora]
+        for ini, fim in periodos:
+            ax.axvspan(ini, fim, color="gray", alpha=0.08, zorder=0)
 
     ax.scatter(res["x_mensal"], res["y_mensal"],
                color="crimson", zorder=5, s=18, alpha=0.7, label="Dados Mensais")
@@ -501,15 +573,18 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     ax.scatter(res["x_futuros"] + ano_base, res["estimativa_futura"],
                color="purple", zorder=5, marker="x", s=30, alpha=0.8,
                label="Estimativa Mensal Futura")
-    ax.plot(x_fut + ano_base, res["modelo_tendencia"](x_fut),
+    ax.plot(x_fut + ano_base, y_fut,
             color="purple", lw=2, linestyle="--", label="Extrapolacao Holt-Winters")
+    ax.set_ylim(y_min, y_max)
 
+    # O período excluído vai numa segunda linha: somado a um nome de série longo,
+    # ele passava da largura da figura e o título saía cortado
     titulo_padrao = f"Interpolação e Extrapolação - {res['col_valor']}"
-    if res.get("excluir_periodo"):
-        titulo_padrao += " (sem o período excluído)"
+    if periodos:
+        titulo_padrao += f"\n(sem o período excluído: {descrever_periodos(periodos)})"
     ax.set_title(titulo or titulo_padrao, fontsize=14, fontweight="bold")
     ax.set_xlabel("Ano")
-    ax.set_ylabel(label_y or res["col_valor"])
+    ax.set_ylabel(textwrap.fill(label_y or res["col_valor"], 40))
     ax.legend()
     ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
