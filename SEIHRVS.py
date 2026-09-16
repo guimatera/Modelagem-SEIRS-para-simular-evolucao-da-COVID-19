@@ -380,13 +380,13 @@ while True:
             # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
             tau = params["tau"]
 
-            # Integrador BDF de quinta ordem (VODE/SciPy) - passo interno adaptativo, ordem máxima 2.
+            # Integrador BDF de quinta ordem (VODE/SciPy) - passo interno adaptativo, ordem máxima 5.
             # O lado direito segue o regime da capacidade das UTIs (livre, lotado ou deslizante); as trocas de
             # regime dentro do passo são localizadas por busca de raiz (brentq), como na solução de referência.
             solver = ode(lambda tt, xx, tau, regime: campo_regime(f, tt, xx, tau, regime))
             # atol precisa ser pequeno: no início E, I e H valem frações de pessoa, e um erro relativo nessa fase
             # cresce com a fase exponencial e vira um atraso no pico da epidemia.
-            solver.set_integrator('vode', method='bdf', order=5, rtol=1e-8, atol=1e-9, nsteps=5000)
+            solver.set_integrator('vode', method='bdf', order=5, rtol=1e-8, atol=1e-9, nsteps=5000, max_step=1.0)
             regime = regime_inicial(f, ICU, t[0], x0, tau)
             config_atual = None
 
@@ -487,7 +487,7 @@ while True:
                     evento = lambda tt, xx, tau=tau, regime=regime: evento_regime(f, ICU, tt, xx, tau, regime)
                     evento.terminal, evento.direction = True, 1
                     sol = solve_ivp(campo, (t_atual, t[b]), y, method='LSODA', t_eval=t[k_prox:b+1],
-                                    events=evento, rtol=1e-10, atol=1e-8)
+                                    events=evento, rtol=1e-10, atol=1e-8, max_step=0.01)
                     if sol.status == -1:
                         raise RuntimeError(f'Solução de referência falhou em t = {t_atual}: {sol.message}')
                     # sol.t fica vazio (lista) quando o evento ocorre antes do próximo ponto da malha.
