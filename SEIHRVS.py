@@ -107,7 +107,7 @@ right_col = [
 # Coluna com a escolha do método numérico.
 metodo_col = [
     [sg.Text('Método Numérico: ')],
-    [sg.Combo(['Runge-Kutta', 'Euler', 'STIFF'], default_value='Runge-Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
+    [sg.Combo(['Runge-Kutta', 'Euler', 'BDF'], default_value='Runge-Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
 ]
 
 # Conteúdo da janela: as quatro colunas lado a lado.
@@ -188,7 +188,7 @@ while True:
             return SEIHRVSdot
 
 
-        # Regimes da capacidade das UTIs, usados pelo método STIFF e pela solução de referência:
+        # Regimes da capacidade das UTIs, usados pelo método BDF e pela solução de referência:
         # 'livre' (H < ICU), 'lotado' (H > ICU) e 'deslizante' (H = ICU). No regime deslizante H fica preso
         # na capacidade (regime deslizante de Filippov): só são internados os que as altas liberam e o
         # excedente de internações vai para os óbitos pela doença.
@@ -355,7 +355,7 @@ while True:
                     k += 1
             return x, t, rt, icu, lockdown_times, taus
 
-        # Método STIFF: BDF de segunda ordem (VODE/SciPy) para computar a evolução das EDO´s ao longo do tempo.
+        # Método BDF: BDF de quinta ordem (VODE/SciPy) para computar a evolução das EDO´s ao longo do tempo.
         def stiff_lockdown(f, x0, t0, tf, dt, params, N):
             t = np.arange(t0,tf,dt)
             nt = t.size
@@ -380,7 +380,7 @@ while True:
             # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
             tau = params["tau"]
 
-            # Integrador BDF de segunda ordem (VODE/SciPy) - passo interno adaptativo, ordem máxima 2.
+            # Integrador BDF de quinta ordem (VODE/SciPy) - passo interno adaptativo, ordem máxima 2.
             # O lado direito segue o regime da capacidade das UTIs (livre, lotado ou deslizante); as trocas de
             # regime dentro do passo são localizadas por busca de raiz (brentq), como na solução de referência.
             solver = ode(lambda tt, xx, tau, regime: campo_regime(f, tt, xx, tau, regime))
@@ -570,8 +570,8 @@ while True:
         if values['-numerical-methods-'] == "Runge-Kutta":
             # Cálculo de Runge-Kutta.
             x,t,rt,icu,lockdown_times,taus = RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
-        elif values['-numerical-methods-'] == "STIFF":
-            # Cálculo por BDF de segunda ordem (VODE/SciPy).
+        elif values['-numerical-methods-'] == "BDF":
+            # Cálculo por BDF de quinta ordem (VODE/SciPy).
             x,t,rt,icu,lockdown_times,taus = stiff_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
         else:
             # Cálculo de Euler
@@ -593,8 +593,8 @@ while True:
         print('Quantidade de leitos de UTI disponíveis: {}'.format(int(ICU)))
         print("Passo utilizado(h): ", dt)
         print("Método numérico utilizado: ", values['-numerical-methods-'])
-        if values['-numerical-methods-'] == "STIFF":
-            print("Integrador: BDF ordem 2 (VODE/SciPy), passo interno adaptativo, trocas de regime das UTIs por eventos")
+        if values['-numerical-methods-'] == "BDF":
+            print("Integrador: BDF ordem 5 (VODE/SciPy), passo interno adaptativo, trocas de regime das UTIs por eventos")
         print("==================================================")
         print('Número total de óbitos ao final da simulação: ', x[6,-1] + x[7,-1]) 
         print('Número total de óbitos por causas naturais ao final da simulação: ', x[6,-1])
