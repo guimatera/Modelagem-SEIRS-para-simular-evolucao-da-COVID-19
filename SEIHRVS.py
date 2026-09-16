@@ -8,112 +8,132 @@ from scipy.optimize import brentq
 # Definindo tema da interface gráfica.
 sg.theme('Default1')  
 
-# Criando layout da interface gráfica.   
-font_size = 6
+# Fonte da interface, definida em um único lugar e herdada por todos os componentes.
+font_size = 8
 font_style = 'Helvetica'
+fonte = (font_style, font_size)
+fonte_titulo = (font_style, font_size + 2)
+sg.set_options(font=fonte)
+
+# Criando layout da interface gráfica.
 left_col = [ 
-            [sg.Text('Parâmetros Gerais:',font=(font_style, font_size+2))], 
-            [sg.Text('Tamanho da população:', font=(font_style, font_size))],
+            [sg.Text('Parâmetros Gerais:',font=fonte_titulo)], 
+            [sg.Text('Tamanho da população:')],
             [sg.Slider(range=(0,8e9), default_value=213421037, resolution=10000,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-popsize-')],
-            [sg.Text('Nascimentos', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal',key='-popsize-')],
+            [sg.Text('Nascimentos')],
             [sg.Slider(range=(0,2e5), default_value=1000, resolution=1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-nascimentos-')], 
-            [sg.Text('Imigração:', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal', key= '-nascimentos-')], 
+            [sg.Text('Imigração:')],
             [sg.Slider(range=(-2e5,2e5), default_value=100, resolution=1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size), key= '-imigracao-')], 
-            [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal', key= '-imigracao-')], 
+            [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):')],
             [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-uti-')],
-            [sg.Text('Taxa de internação nas UTIs:', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal',key='-uti-')],
+            [sg.Text('Taxa de internação nas UTIs:')],
             [sg.Slider(range=(0,1), default_value=0.05, resolution=0.01,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-internacao-')],
-            [sg.Text('R0 (Número de Reprodução Básica):', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal',key='-internacao-')],
+            [sg.Text('R0 (Número de Reprodução Básica):')],
             [sg.Slider(range=(0,20), default_value=12, resolution=0.1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-repr-')],
-            [sg.Text('Tempo(anos):', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal',key='-repr-')],
+            [sg.Text('Tempo(anos):')],
             [sg.Slider(range=(0,10), default_value=5, resolution=1,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-time-')],
-            [sg.Text('Nível de distanciamento social:', font=(font_style, font_size))],
+            size=(50,10), orientation='horizontal',key='-time-')],
+            [sg.Text('Nível de distanciamento social:')],
             [sg.Slider(range=(0,1), default_value=0.2, resolution=0.01,
-            size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-distance-')],
-            [sg.Text('Período de Incubação(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,10), default_value=5.1, resolution=0.1,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-incubacao-')], 
-            [sg.Text('Período de infecção(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-infeccao-')],
-            [sg.Text('Período de imunidade(anos) - Recuperados: ', font=(font_style, font_size)), sg.Slider(range=(0,20), default_value=1, resolution=0.5,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeNatural-')],
-            [sg.Text('Período de imunidade(anos) -  Vacinados: ', font=(font_style, font_size)), sg.Slider(range=(0,20), default_value=5, resolution=0.5,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-imunidadeVacinados-')],
-            [sg.Text('Taxa de mortalidade natural(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,1e-4), default_value=2e-5, resolution=1e-5,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeNatural-')],
-            [sg.Text('Taxa de mortalidade de Infectados(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,1), default_value=0.1, resolution=0.01,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeInfectados-')],
-            [sg.Text('Taxa de mortalidade de Hospitalizados(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-mortalidadeHospitalizados-')],
-            [sg.Text('Taxa de Suscetíveis Externos(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,1), default_value=0.9998, resolution=0.0001,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-suscetíveisExternos-')],
-            [sg.Text('Taxa de Expostos Externos(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-expostosExternos-')],
-            [sg.Text('Taxa de Recuperados Externos(dias): ', font=(font_style, font_size)), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
-            size=(10,10), orientation='horizontal', font=(font_style, font_size), key= '-recuperadosExternos-')],
+            size=(50,10), orientation='horizontal',key='-distance-')],
+            [sg.Text('Período de Incubação(dias): '), sg.Slider(range=(0,10), default_value=5.1, resolution=0.1,
+            size=(10,10), orientation='horizontal', key= '-incubacao-')], 
+            [sg.Text('Período de infecção(dias): '), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
+            size=(10,10), orientation='horizontal', key= '-infeccao-')],
+            [sg.Text('Período de imunidade(anos) - Recuperados: '), sg.Slider(range=(0,20), default_value=1, resolution=0.5,
+            size=(10,10), orientation='horizontal', key= '-imunidadeNatural-')],
+            [sg.Text('Período de imunidade(anos) -  Vacinados: '), sg.Slider(range=(0,20), default_value=5, resolution=0.5,
+            size=(10,10), orientation='horizontal', key= '-imunidadeVacinados-')],
+            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,1e-4), default_value=2e-5, resolution=1e-5,
+            size=(10,10), orientation='horizontal', key= '-mortalidadeNatural-')],
+            [sg.Text('Taxa de mortalidade de Infectados(dias): '), sg.Slider(range=(0,1), default_value=0.1, resolution=0.01,
+            size=(10,10), orientation='horizontal', key= '-mortalidadeInfectados-')],
+            [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
+            size=(10,10), orientation='horizontal', key= '-mortalidadeHospitalizados-')],
+            [sg.Text('Taxa de Suscetíveis Externos(dias): '), sg.Slider(range=(0,1), default_value=0.9998, resolution=0.0001,
+            size=(10,10), orientation='horizontal', key= '-suscetíveisExternos-')],
+            [sg.Text('Taxa de Expostos Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
+            size=(10,10), orientation='horizontal', key= '-expostosExternos-')],
+            [sg.Text('Taxa de Recuperados Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
+            size=(10,10), orientation='horizontal', key= '-recuperadosExternos-')],
 ]
 
 middle_col = [ 
     [sg.Text('Condições inciais:')],
     [sg.Text('Pessoas Expostas:')],
     [sg.Slider(range=(0,2e6), default_value=1, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-E0-')],
+    size=(50,10), orientation='horizontal',key='-E0-')],
     [sg.Text('Pessoas Infectadas:')],
     [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-I0-')],
+    size=(50,10), orientation='horizontal',key='-I0-')],
     [sg.Text('Pessoas Hospitalizadas:')],
     [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-H0-')],
+    size=(50,10), orientation='horizontal',key='-H0-')],
     [sg.Text('Pessoas Vacinadas:')],
     [sg.Slider(range=(0,2e8), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-V0-')],
+    size=(50,10), orientation='horizontal',key='-V0-')],
     [sg.Text('Pessoas Recuperadas:')],
     [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size),key='-R0-')],
+    size=(50,10), orientation='horizontal',key='-R0-')],
 ]
 
 right_col = [
     [sg.Text('Ações de Controle: ')],
     [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-    font=(font_style, font_size),key='-vacinacao-')],
+    key='-vacinacao-')],
     [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
-    size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-vacinacao-')],
+    size=(10,10), orientation='horizontal', key='-taxa-vacinacao-')],
     [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.97, resolution=0.01,
-    size=(10,10), orientation='horizontal', font=(font_style, font_size), key='-taxa-efetividade-')],
+    size=(10,10), orientation='horizontal', key='-taxa-efetividade-')],
     [sg.Text('Tempo para início da vacinação: ')],
     [sg.Slider(range=(0,10), default_value=2, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-tempo-vacinacao-')],
+    size=(50,10), orientation='horizontal', key='-tempo-vacinacao-')],
     [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-    font=(font_style, 8),key='-lockdown-')],
+    key='-lockdown-')],
     [sg.Text('Duração do lockdown de emergência(dias):')],
     [sg.Slider(range=(0,60), default_value=30, resolution=1,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-duracao-lockdown-')],
+    size=(50,10), orientation='horizontal', key='-duracao-lockdown-')],
     [sg.Text('Taxa de ocupação limite de leitos: ')],
     [sg.Slider(range=(0,1), default_value=0.5, resolution=0.01,
-    size=(50,10), orientation='horizontal', font=(font_style, font_size), key='-icu-condicao-')],
+    size=(50,10), orientation='horizontal', key='-icu-condicao-')],
 ]
            
-layout = [
+# Coluna com a escolha do método numérico.
+metodo_col = [
+    [sg.Text('Método Numérico: ')],
+    [sg.Combo(['Runge-Kutta', 'Euler', 'STIFF'], default_value='Runge-Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
+]
+
+# Conteúdo da janela: as quatro colunas lado a lado.
+corpo = [
     [
-        [sg.Text('Método Numérico: ', font=(font_style, font_size))],
-        [sg.Combo(['Runge-Kutta', 'Euler', 'STIFF'], default_value='Runge-Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
+        sg.Column(metodo_col, vertical_alignment='top'),
         sg.Column(left_col, vertical_alignment='top'),
         sg.Column(middle_col, vertical_alignment='top'),
         sg.Column(right_col, vertical_alignment='top'),
-    ],
+    ]
+]
+
+# O conteúdo fica em uma coluna rolável, com tamanho limitado ao do monitor, para a janela caber em
+# qualquer tela. Ao maximizar, a coluna cresce junto com a janela e mostra mais conteúdo de uma vez.
+largura_tela, altura_tela = sg.Window.get_screen_size()
+tamanho_corpo = (min(1500, int(largura_tela*0.95)), min(900, int(altura_tela*0.80)))
+
+layout = [
+    [sg.Column(corpo, key='-corpo-', size=tamanho_corpo, scrollable=True, vertical_scroll_only=True)],
     [sg.Button('Ok'), sg.Button('Cancel')]
 ]
 
-    
-
-# Criando a janela.
-window = sg.Window('Modelo SEIHRVS', layout, finalize=True)
+# Criando a janela. Com resizable=True dá para redimensionar e maximizar pela barra de título.
+window = sg.Window('Modelo SEIHRVS', layout, resizable=True, finalize=True)
+# Faz a coluna rolável acompanhar o tamanho da janela.
+window['-corpo-'].expand(True, True)
 
 while True:
     event, values = window.read()
@@ -366,11 +386,11 @@ while True:
             solver = ode(lambda tt, xx, tau, regime: campo_regime(f, tt, xx, tau, regime))
             # atol precisa ser pequeno: no início E, I e H valem frações de pessoa, e um erro relativo nessa fase
             # cresce com a fase exponencial e vira um atraso no pico da epidemia.
-            solver.set_integrator('vode', method='bdf', order=2, rtol=1e-8, atol=1e-9, nsteps=5000)
+            solver.set_integrator('vode', method='bdf', order=5, rtol=1e-8, atol=1e-9, nsteps=5000)
             regime = regime_inicial(f, ICU, t[0], x0, tau)
             config_atual = None
 
-            def passo_bdf2(k, tau):
+            def passo_bdf5(k, tau):
                 nonlocal regime, config_atual
                 t_a, y_a = t[k], x[:,k].copy()
                 vacina = params["VacinaAtiva"] and t[k] >= params["TempoInicioVacinacao"]
@@ -382,7 +402,7 @@ while True:
                         config_atual = (tau, regime, vacina)
                     y_b = solver.integrate(t[k+1])
                     if not solver.successful():
-                        raise RuntimeError(f'BDF2 (VODE) falhou em t = {t_a}')
+                        raise RuntimeError(f'BDF5 (VODE) falhou em t = {t_a}')
                     g_b = evento_regime(f, ICU, t[k+1], y_b, tau, regime)
                     if g_b < 0:
                         x[:,k+1] = y_b
@@ -404,7 +424,7 @@ while True:
                         t_a = t_e
                     regime = trocar_regime(f, ICU, t_a, y_a, tau, regime)
                     config_atual = None
-                raise RuntimeError(f'BDF2 (VODE): trocas de regime demais perto de t = {t_a}')
+                raise RuntimeError(f'BDF5 (VODE): trocas de regime demais perto de t = {t_a}')
 
             k = 0
             duracao_lockdown = float(values['-duracao-lockdown-'])
@@ -420,7 +440,7 @@ while True:
                             break
                         tau = 0.7
                         taus.append(tau)
-                        passo_bdf2(k, tau)
+                        passo_bdf5(k, tau)
 
                         # Cálculo da variação do número básico de reprodução ao longo do tempo.
                         rt.append(r0*((1-tau)*x[0,k]/N))
@@ -429,7 +449,7 @@ while True:
                 else:
                     tau = params["tau"]
                     taus.append(tau)
-                    passo_bdf2(k, tau)
+                    passo_bdf5(k, tau)
 
                     # Cálculo da variação do número de reprodução ao longo do tempo.
                     rt.append(r0*((1-tau)*x[0,k]/N))
