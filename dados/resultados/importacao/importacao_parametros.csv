@@ -1,0 +1,4 @@
+cenario;eventos;anos_expostos;casos;mu_eventos_ano;ic95_poisson_inf;ic95_poisson_sup;ic95_bootstrap_inf;ic95_bootstrap_sup;indice_dispersao;anos_sem_evento_obs;anos_sem_evento_poisson
+2007-2026;50;19.75;419;2.532;1.879;3.338;1.2;4.15;4.48;9;1.66
+sem 2018-2020;26;16.75;71;1.552;1.014;2.274;0.588;2.708;3.36;9;3.7
+2021-2026;10;5.75;38;1.739;0.834;3.198;0.333;3.81;3.28;3;1.15

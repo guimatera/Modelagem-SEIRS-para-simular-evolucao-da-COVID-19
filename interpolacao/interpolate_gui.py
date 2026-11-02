@@ -30,6 +30,13 @@ ALTURA_LINHA_CSV = 33   # px por checkbox (medido com Segoe UI 10)
 # Cada CSV marcado vira uma janela de gráfico separada, guardada aqui por caminho
 janelas_graficos = {}
 
+# Séries derivadas: diferença mês a mês (A - B) entre dois CSVs do diretório de
+# dados. Chave = rótulo do checkbox; o nome também identifica a janela do gráfico.
+SERIES_DIFERENCA = {
+    "Emigração - Imigração (saídas - entradas)": (
+        "emigracao_mensal_brasil.csv", "imigracao_mensal_brasil.csv", "emigracao-imigracao"),
+}
+
 
 # =============================================================================
 # 1. JANELA PRINCIPAL (checkboxes dos CSVs + opções)
@@ -55,6 +62,19 @@ def linhas_checkbox(arquivos, separador):
                      key=("-CSV-", arq), font=(FONT_FAMILY, FONT_SIZE))]
         for i, arq in enumerate(arquivos)
     ]
+
+
+def linhas_diferenca():
+    """Um checkbox por série derivada; desabilitado se faltar algum dos CSVs."""
+    linhas = []
+    for rotulo, (arq_a, arq_b, _) in SERIES_DIFERENCA.items():
+        faltando = [a for a in (arq_a, arq_b)
+                    if not os.path.isfile(os.path.join(itp.DIRETORIO_DADOS, a))]
+        texto = rotulo + (f"   (falta {', '.join(faltando)})" if faltando else "")
+        linhas.append([sg.Checkbox(texto, default=False, key=("-DIF-", rotulo),
+                                   disabled=bool(faltando),
+                                   font=(FONT_FAMILY, FONT_SIZE))])
+    return linhas
 
 
 def montar_janela_principal(arquivos, separador):
@@ -83,6 +103,9 @@ def montar_janela_principal(arquivos, separador):
                  font=(FONT_FAMILY, FONT_SIZE))], 
         [sg.Frame("Arquivos CSV", [[coluna_csvs]], expand_x=True)],
         [sg.Button("Marcar todos"), sg.Button("Limpar seleção")],
+        [sg.Frame("Séries derivadas (diferença mês a mês, só interpolação + integral)",
+                  linhas_diferenca(),
+                  expand_x=True)],
         [sg.Frame("Opções", opcoes, expand_x=True)],
         [sg.Button("Gerar gráficos", bind_return_key=True),
          sg.Button("Fechar gráficos"), sg.Push(), sg.Button("Sair")]
@@ -112,12 +135,22 @@ def abrir_janela_grafico(res):
     altura_px  = int(TAMANHO_GRAFICO[1] * DPI_GRAFICO)
 
     layout = [
-        [sg.Text(res["col_valor"], font=(FONT_FAMILY, FONT_SIZE+1))], 
+        [sg.Text(res["col_valor"], font=(FONT_FAMILY, FONT_SIZE+1))],
         [sg.Canvas(key="-TOOLBAR-", size=(largura_px, 40))],
         [sg.Canvas(key="-CANVAS-", size=(largura_px, altura_px))],
+    ]
+    if res["modelo_tendencia"] is not None:
         # R2 da extrapolacao REALMENTE plotada (curva roxa).
-        [sg.Text(f"R² - {res['rotulo_modelo']} (curva plotada): "
-                 f"{res['r2_tendencia']:.4f}", font=(FONT_FAMILY, FONT_SIZE, "bold"))],
+        layout.append([sg.Text(f"R² - {res['rotulo_modelo']} (curva plotada): "
+                               f"{res['r2_tendencia']:.4f}",
+                               font=(FONT_FAMILY, FONT_SIZE, "bold"))])
+    if res.get("integral"):
+        integ = res["integral"]
+        layout += [
+            [sg.Text(f"Integral da spline: {itp.descrever_integral(integ)}",
+                     font=(FONT_FAMILY, FONT_SIZE, "bold"))]
+        ]
+    layout += [
         # Spline cubica INTERPOLA os pontos (passa por todos), entao R2=1 sempre:
         # e so uma confirmacao de que a interpolacao esta correta, nao uma metrica
         # de qualidade de ajuste.
@@ -175,8 +208,9 @@ def gerar_graficos(janela, valores, arquivos):
     excluir   = itp.PERIODO_COVID if valores["-SEM-COVID-"] else None
 
     selecionados = csvs_marcados(valores, arquivos)
-    if not selecionados:
-        sg.popup("Marque ao menos um CSV para gerar gráficos.",
+    diferencas   = [r for r in SERIES_DIFERENCA if valores.get(("-DIF-", r))]
+    if not selecionados and not diferencas:
+        sg.popup("Marque ao menos um CSV ou série derivada para gerar gráficos.",
                  title="Nenhum arquivo selecionado", font=FONT_FAMILY)
         return
 
@@ -188,6 +222,18 @@ def gerar_graficos(janela, valores, arquivos):
         except Exception as erro:
             traceback.print_exc()
             sg.popup_error(f"Falha ao processar '{arquivo}':\n\n{erro}", font=FONT_FAMILY)
+
+    for rotulo in diferencas:
+        arq_a, arq_b, nome = SERIES_DIFERENCA[rotulo]
+        try:
+            res = itp.analisar_diferenca(os.path.join(itp.DIRETORIO_DADOS, arq_a),
+                                         os.path.join(itp.DIRETORIO_DADOS, arq_b),
+                                         separador=separador,
+                                         excluir_periodo=excluir, nome=nome)
+            abrir_janela_grafico(res)
+        except Exception as erro:
+            traceback.print_exc()
+            sg.popup_error(f"Falha ao processar '{rotulo}':\n\n{erro}", font=FONT_FAMILY)
 
 
 def main():

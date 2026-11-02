@@ -1,0 +1,54 @@
+SARAMPO e RUBÉOLA - Casos notificados no Sistema de Informação de Agravos de Notificação - Brasil
+casos notificados por Ano(s) de início do exantema e Mês Notificação
+País F. infecção: 220  220, 227  227, 228  228, 230  230, 238  238, 241  241, 208  208, 213  213, 214  214, 223  223, 224  224, 25   25, 221  221, 222  222, 229  229, 232  232, 233  233, 234  234, 235  235, 236  236, 110  110, 116  116, 73   73, 119  119, 86   86, 40   40, 45   45, 38   38, 211  211, 215  215, 216  216, 52   52, 57   57, 64   64, 68   68, 71   71, 76   76, 81   81, 84   84, 91   91, 95   95, 100  100, 103  103, 106  106, 109  109, 113  113, 121  121, 219  219, 226  226, 240  240, 231  231, 2    2, 3    3, 4    4, 5    5, 6    6, 7    7, 8    8, 9    9, 10   10, 11   11, 12   12, 13   13, 14   14, 15   15, 16   16, 17   17, 18   18, 19   19, 20   20, 21   21, 22   22, 23   23, 24   24, 26   26, 27   27, 28   28, 29   29, 30   30, 31   31, 32   32, 33   33, 34   34, 35   35, 36   36, 37   37, 39   39, 41   41, 42   42, 43   43, 44   44, 46   46, 47   47, 48   48, 49   49, 50   50, 51   51, 54   54, 55   55, 56   56, 58   58, 59   59, 60   60, 61   61, 62   62, 63   63, 65   65, 66   66, 67   67, 69   69, 70   70, 72   72, 74   74, 75   75, 77   77, 78   78, 79   79, 80   80, 82   82, 83   83, 85   85, 88   88, 89   89, 90   90, 92   92, 93   93, 94   94, 96   96, 97   97, 98   98, 99   99, 101  101, 102  102, 104  104, 105  105, 107  107, 108  108, 111  111, 112  112, 114  114, 115  115, 118  118, 120  120, 122  122, 123  123, 124  124, 126  126, 127  127, 128  128, 129  129, 130  130, 131  131, 132  132, 133  133, 134  134, 135  135, 136  136, 137  137, 138  138, 139  139, 140  140, 141  141, 142  142, 143  143, 144  144, 145  145, 146  146, 147  147, 148  148, 149  149, 150  150, 151  151, 152  152, 153  153, 154  154, 155  155, 156  156, 157  157, 158  158, 159  159, 160  160, 161  161, 162  162, 163  163, 164  164, 165  165, 166  166, 167  167, 168  168, 170  170, 171  171, 172  172, 173  173, 174  174, 175  175, 176  176, 177  177, 178  178, 179  179, 180  180, 181  181, 182  182, 183  183, 184  184, 185  185, 186  186, 187  187, 188  188, 189  189, 190  190, 191  191, 192  192, 193  193, 194  194, 195  195, 196  196, 198  198, 199  199, 200  200, 201  201, 202  202, 203  203, 204  204, 205  205, 206  206, 125  125, 207  207, 209  209, 210  210, 237  237, 217  217, 212  212, 218  218, 225  225, 239  239
+Class. Final: SARAMPO
+Período:2007-2026
+"Ano(s) de início do exantema";"Jan";"Fev";"Mar";"Abr";"Mai";"Jun";"Jul";"Ago";"Set";"Out";"Nov";"Dez";"Total"
+"2010";-;-;-;-;-;-;-;4;3;-;-;-;7
+"2011";-;1;1;3;4;-;-;-;1;1;-;-;11
+"2012";2;-;-;-;-;-;-;-;-;-;-;-;2
+"2013";2;-;1;-;6;1;-;1;-;-;-;1;12
+"2014";-;1;-;-;-;-;-;-;-;-;-;-;1
+"2018";-;18;133;33;40;9;14;24;41;4;1;-;317
+"2019";2;2;5;1;-;-;4;4;1;2;2;1;24
+"2020";1;4;1;1;-;-;-;-;-;-;-;-;7
+"2024";1;-;-;-;-;-;-;-;-;2;-;-;3
+"2025";-;-;1;-;-;-;18;4;6;3;-;1;33
+"2026";-;1;-;1;-;-;-;-;-;-;-;-;2
+"Total";8;27;142;39;50;10;36;37;52;12;3;3;419
+ Fonte: Ministério da Saúde/SVSA - Sistema de Informação de Agravos de Notificação - Sinan Net
+ Notas:
+ 
+ Períodos Disponíveis ou período - Correspondem aos anos de notificação dos casos;
+ Para tabular dados epidemiológicos de um determinado ano selecione na linha a variável de interesse, na Coluna Ano de início do exantema;
+ em Períodos Disponíveis assinale o ano inicial da série e todos os posteriores até o ano atual (p/ incluir casos notificados com atraso)
+ e em Seleções Disponíveis assinale os anos de início do exantema (ex: nº de casos com início do exantema 2007: selecione na linha UF de residência,
+ na Coluna Ano de início do exantema, em Períodos disponíveis 2007 até o ano atual e em Seleções assinale Ano de início do exantema 2007);
+ Para cálculo da incidência selecione sarampo ou rubéola em Classificação final e analise por local de residência;
+ Banco de dados, reportam dados não qualificados, ou seja, não foram retiradas inconsistências e nem duplicidades;
+ O último caso confirmado de Rubéola confirmado no Brasil, ocorreu no ano de 2008;
+ Do número de casos confirmados de sarampo no Brasil, segue: - Em 2015 – foram confirmados 214 casos, sendo: CE (211), SP (02) e RR (01);
+ - Nos anos de 2016 e 2017, o Brasil não confirmou casos de sarampo;
+ - No ano de 2018 – foram confirmados 9.329 casos, sendo: AM (8.789), RR (368), PA (84), RS (47), RJ (20), PE (4), SE (4), BA (3), SP (7), RO (2) e DF (1);
+ Os genótipos identificados foram o D8 e 1B3; - Em 2019 – foram confirmados 21.741 casos, sendo: SP (18.086), PR (1.599), RJ (463), PA (429), PE (344), SC (297),
+ MG (158), RS (100), BA (80), PB (66), AL (35), CE (19), GO (15), DF (11), RN (9), MA (8), SE (6), AM (4), ES (4), PI (3), MS (2), AP (2) e RR (1).
+ O genótipo identificado foi o D8. No ano de 2020 – foram confirmados 8.035 casos, sendo: PA (4.844), RJ (1.358), SP (879), PR (377), AP (296), SC (107), PE (38),
+ RS (37), MG (22), MA (17), MS (10), DF (8), SE (8), AM (7), BA (7), CE (7), RO (6), GO (2), AL (3), MT (1), TO (1). O genótipo identificado foi o D8; - Em 2021
+ – foram confirmados 670 casos, sendo: AP (534), PA (111), AL (11), SP (8), RJ (3) e CE (3); O genótipo identificado foi o D8. - No ano de 2022 – foram confirmados 41 casos,
+ sendo: AP (30), SP (8), PA (1), RJ (2); O genótipo identificado foi o D8; - No ano de 2022, o último caso endêmico confirmado de sarampo ocorreu em 05/06/2022, segundo data de início do exantema.
+ Em 2024 foram confirmados 5 casos, destes, 3 casos foram importados sendo: RS (1); MG (1); SP (1) e 2 casos com fonte de infecção desconhecida no RJ. Os genótipos identificados foram o D8 e B3.
+ Em 2025 foram confirmados 38 casos, destes, 10 casos foram importados sendo DF (1); RS (1); SP (1); TO (4); MT (3), 25 casos foram relacionados a importação sendo: TO (21); MA (1); MT (3) e 3 casos tiveram fonte de infecção desconhecida sendo: RJ (2); S
+ Em 2026, até o momento, foram confirmados 3 casos, destes 2 casos foram importados em São Paulo e 1 caso com fonte de infecção desconhecida no Rio de Janeiro.
+ Dados de 2007 a 2017 revisados e atualizados em 10/02/2023, sujeitos à revisão.
+ Dados de 2018 atualizados em 06/04/2026, sujeitos à revisão.
+ Dados de 2019 atualizados em 07/04/2026, sujeitos à revisão.
+ Dados de 2020 atualizados em 08/04/2026, sujeitos à revisão.
+ Dados de 2021 atualizados em 08/04/2026, sujeitos à revisão.
+ Dados de 2022 atualizados em 09/04/2026, sujeitos à revisão.
+ Dados de 2023 atualizados em 17/09/2026, sujeitos à revisão.
+ Dados de 2024 atualizados em 21/09/2026, sujeitos à revisão.
+ Dados de 2025 atualizados em 14/09/2026, sujeitos à revisão.
+ Dados de 2026 atualizados em 15/09/2026, sujeitos à revisão.
+ Os dados do Espírito Santo, notificados no sistema de informação e-SUS VS, foram compilados nos bancos do Sinan dos respectivos anos de notificação. Sua última atualização foi em 23/09/2026.
+ * Dados disponibilizados no TABNET em setembro de 2026.
+ 

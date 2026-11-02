@@ -1,650 +1,453 @@
-# Importando bibliotecas necessárias para o projeto.
-import PySimpleGUI as sg
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.integrate import ode, solve_ivp
-from scipy.optimize import brentq
 
-# Definindo tema da interface gráfica.
-sg.theme('Default1')  
-
-# Fonte da interface, definida em um único lugar e herdada por todos os componentes.
-font_size = 8
-font_style = 'Helvetica'
-fonte = (font_style, font_size)
-fonte_titulo = (font_style, font_size + 2)
-sg.set_options(font=fonte)
-
-# Criando layout da interface gráfica.
-left_col = [ 
-            [sg.Text('Parâmetros Gerais:',font=fonte_titulo)], 
-            [sg.Text('Tamanho da população:')],
-            [sg.Slider(range=(0,8e9), default_value=213421037, resolution=10000,
-            size=(50,10), orientation='horizontal',key='-popsize-')],
-            [sg.Text('Nascimentos')],
-            [sg.Slider(range=(0,2e5), default_value=1000, resolution=1,
-            size=(50,10), orientation='horizontal', key= '-nascimentos-')], 
-            [sg.Text('Imigração:')],
-            [sg.Slider(range=(-2e5,2e5), default_value=100, resolution=1,
-            size=(50,10), orientation='horizontal', key= '-imigracao-')], 
-            [sg.Text('Quantidade de UTIs disponíveis (a cada 10000 pessoas):')],
-            [sg.Slider(range=(0,20), default_value=1, resolution=0.1,
-            size=(50,10), orientation='horizontal',key='-uti-')],
-            [sg.Text('Taxa de internação nas UTIs:')],
-            [sg.Slider(range=(0,1), default_value=0.05, resolution=0.01,
-            size=(50,10), orientation='horizontal',key='-internacao-')],
-            [sg.Text('R0 (Número de Reprodução Básica):')],
-            [sg.Slider(range=(0,20), default_value=12, resolution=0.1,
-            size=(50,10), orientation='horizontal',key='-repr-')],
-            [sg.Text('Tempo(anos):')],
-            [sg.Slider(range=(0,10), default_value=5, resolution=1,
-            size=(50,10), orientation='horizontal',key='-time-')],
-            [sg.Text('Nível de distanciamento social:')],
-            [sg.Slider(range=(0,1), default_value=0.2, resolution=0.01,
-            size=(50,10), orientation='horizontal',key='-distance-')],
-            [sg.Text('Período de Incubação(dias): '), sg.Slider(range=(0,10), default_value=5.1, resolution=0.1,
-            size=(10,10), orientation='horizontal', key= '-incubacao-')], 
-            [sg.Text('Período de infecção(dias): '), sg.Slider(range=(0,10), default_value=3.3, resolution=0.1,
-            size=(10,10), orientation='horizontal', key= '-infeccao-')],
-            [sg.Text('Período de imunidade(anos) - Recuperados: '), sg.Slider(range=(0,20), default_value=1, resolution=0.5,
-            size=(10,10), orientation='horizontal', key= '-imunidadeNatural-')],
-            [sg.Text('Período de imunidade(anos) -  Vacinados: '), sg.Slider(range=(0,20), default_value=5, resolution=0.5,
-            size=(10,10), orientation='horizontal', key= '-imunidadeVacinados-')],
-            [sg.Text('Taxa de mortalidade natural(dias): '), sg.Slider(range=(0,1e-4), default_value=2e-5, resolution=1e-5,
-            size=(10,10), orientation='horizontal', key= '-mortalidadeNatural-')],
-            [sg.Text('Taxa de mortalidade de Infectados(dias): '), sg.Slider(range=(0,1), default_value=0.1, resolution=0.01,
-            size=(10,10), orientation='horizontal', key= '-mortalidadeInfectados-')],
-            [sg.Text('Taxa de mortalidade de Hospitalizados(dias): '), sg.Slider(range=(0,1), default_value=0.3, resolution=0.01,
-            size=(10,10), orientation='horizontal', key= '-mortalidadeHospitalizados-')],
-            [sg.Text('Taxa de Suscetíveis Externos(dias): '), sg.Slider(range=(0,1), default_value=0.9998, resolution=0.0001,
-            size=(10,10), orientation='horizontal', key= '-suscetíveisExternos-')],
-            [sg.Text('Taxa de Expostos Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
-            size=(10,10), orientation='horizontal', key= '-expostosExternos-')],
-            [sg.Text('Taxa de Recuperados Externos(dias): '), sg.Slider(range=(0,1), default_value=0.0001, resolution=0.0001,
-            size=(10,10), orientation='horizontal', key= '-recuperadosExternos-')],
-]
-
-middle_col = [ 
-    [sg.Text('Condições inciais:')],
-    [sg.Text('Pessoas Expostas:')],
-    [sg.Slider(range=(0,2e6), default_value=1, resolution=1,
-    size=(50,10), orientation='horizontal',key='-E0-')],
-    [sg.Text('Pessoas Infectadas:')],
-    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal',key='-I0-')],
-    [sg.Text('Pessoas Hospitalizadas:')],
-    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal',key='-H0-')],
-    [sg.Text('Pessoas Vacinadas:')],
-    [sg.Slider(range=(0,2e8), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal',key='-V0-')],
-    [sg.Text('Pessoas Recuperadas:')],
-    [sg.Slider(range=(0,2e6), default_value=0, resolution=1,
-    size=(50,10), orientation='horizontal',key='-R0-')],
-]
-
-right_col = [
-    [sg.Text('Ações de Controle: ')],
-    [sg.Text('Vacinação: '), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-    key='-vacinacao-')],
-    [sg.Text('Taxa de vacinação por dia: '), sg.Slider(range=(0,1), default_value=0.0021, resolution=0.0001,
-    size=(10,10), orientation='horizontal', key='-taxa-vacinacao-')],
-    [sg.Text('Taxa de efetividade da vacinação: '), sg.Slider(range=(0,1), default_value=0.97, resolution=0.01,
-    size=(10,10), orientation='horizontal', key='-taxa-efetividade-')],
-    [sg.Text('Tempo para início da vacinação: ')],
-    [sg.Slider(range=(0,10), default_value=2, resolution=1,
-    size=(50,10), orientation='horizontal', key='-tempo-vacinacao-')],
-    [sg.Text('Lockdown de emergência:'), sg.Spin(values=('No', 'Yes'), initial_value='No',size=(5,10),
-    key='-lockdown-')],
-    [sg.Text('Duração do lockdown de emergência(dias):')],
-    [sg.Slider(range=(0,60), default_value=30, resolution=1,
-    size=(50,10), orientation='horizontal', key='-duracao-lockdown-')],
-    [sg.Text('Taxa de ocupação limite de leitos: ')],
-    [sg.Slider(range=(0,1), default_value=0.5, resolution=0.01,
-    size=(50,10), orientation='horizontal', key='-icu-condicao-')],
-]
-           
-# Coluna com a escolha do método numérico.
-metodo_col = [
-    [sg.Text('Método Numérico: ')],
-    [sg.Combo(['Runge-Kutta', 'Euler', 'BDF'], default_value='Runge-Kutta', size=(15, 3), key='-numerical-methods-', readonly=True)],
-]
-
-# Conteúdo da janela: as quatro colunas lado a lado.
-corpo = [
-    [
-        sg.Column(metodo_col, vertical_alignment='top'),
-        sg.Column(left_col, vertical_alignment='top'),
-        sg.Column(middle_col, vertical_alignment='top'),
-        sg.Column(right_col, vertical_alignment='top'),
-    ]
-]
-
-# O conteúdo fica em uma coluna rolável, com tamanho limitado ao do monitor, para a janela caber em
-# qualquer tela. Ao maximizar, a coluna cresce junto com a janela e mostra mais conteúdo de uma vez.
-largura_tela, altura_tela = sg.Window.get_screen_size()
-tamanho_corpo = (min(1500, int(largura_tela*0.95)), min(900, int(altura_tela*0.80)))
-
-layout = [
-    [sg.Column(corpo, key='-corpo-', size=tamanho_corpo, scrollable=True, vertical_scroll_only=True)],
-    [sg.Button('Ok'), sg.Button('Cancel')]
-]
-
-# Criando a janela. Com resizable=True dá para redimensionar e maximizar pela barra de título.
-window = sg.Window('Modelo SEIHRVS', layout, resizable=True, finalize=True)
-# Faz a coluna rolável acompanhar o tamanho da janela.
-window['-corpo-'].expand(True, True)
-
-while True:
-    event, values = window.read()
-
-    if event == sg.WIN_CLOSED or event == 'Cancel': # Fecha janela se clicar no ícone de fechar ou no botão de cancelar.
-        break
-    if event == 'Ok':
-
-        # Função que define as EDO's da modelagem SEIHRVS para uma epidemia.
-        def SEIHRVS_MODEL(x, t, params, N, u, ICU, sobrecapacidade=None):
-            # Coleta de parâmetros
-            alpha = params["Alpha"]
-            beta = params["Beta"]
-            gammaI = params["GammaI"]
-            gammaH = params["GammaH"]
-            delta = params["Delta"]
-            muI = params["MuI"]
-            muH = params["MuH"]
-            omegaR = params["OmegaR"]
-            omegaV = params["OmegaV"]
-            pi = params["Pi"]
-            sigma = params["Sigma"]
-            zetaS = params["ZetaS"]
-            zetaE = params["ZetaE"]
-            zetaR = params["zetaR"]
-            epsillon = params["Epsillon"]
-            e = params["e"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
-            v = params["v"] if params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"] else 0.0
-            tau = params["tau"]
-
-            # Decisão entre parâmetro tau inicial ou parâmetro tau de Lockdown
-            amort = u if u != tau else tau
-
-            vacina_ativa = params["VacinaAtiva"] and t >= params["TempoInicioVacinacao"]
-            fluxo_vacinacao = e*v*x[0] - (pi + omegaV)*x[5] if vacina_ativa else 0.0 
-            # Quando informado, fixa o estado de sobrecapacidade das UTIs (usado pelos regimes de capacidade das UTIs).
-            sobrecapacidade_uti = x[3] > ICU if sobrecapacidade is None else sobrecapacidade
-
-            # Array com Edos do modelo.
-            mortes_naturais = pi * (x[0] + x[1] + x[2] + x[3] + x[4] + x[5])
-            mortes_doenca = muI*x[2] + muH*x[3] + (delta*x[2] if sobrecapacidade_uti else 0.0)
-
-            SEIHRVSdot = np.array([-(1-amort)*(beta*x[0]*x[2]/N) + omegaR*x[4] - pi*x[0] - fluxo_vacinacao + sigma + zetaS*epsillon, #dS/dt
-                            (1-amort)*(beta*x[0]*x[2]/N) - (alpha + pi)*x[1] + zetaE*epsillon, #dE/dt
-                            alpha*x[1] - (gammaI + delta + pi + muI)*x[2], #dI/dt
-                            delta*x[2] - (gammaH + muH + pi)*x[3] if not sobrecapacidade_uti else -(gammaH + muH + pi)*x[3], #dH/dt
-                            gammaI*x[2] + gammaH*x[3] - (omegaR + pi)*x[4] + zetaR*epsillon, #dR/dt
-                            fluxo_vacinacao,  #dV/dt
-                            mortes_naturais,
-                            mortes_doenca
-                            ]) 
-            return SEIHRVSdot
-
-
-        # Regimes da capacidade das UTIs, usados pelo método BDF e pela solução de referência:
-        # 'livre' (H < ICU), 'lotado' (H > ICU) e 'deslizante' (H = ICU). No regime deslizante H fica preso
-        # na capacidade (regime deslizante de Filippov): só são internados os que as altas liberam e o
-        # excedente de internações vai para os óbitos pela doença.
-        def campo_regime(f, tt, xx, tau, regime):
-            if regime == 'livre':
-                return f(tt, xx, tau, False)
-            if regime == 'lotado':
-                return f(tt, xx, tau, True)
-            # Combinação dos dois campos que mantém dH/dt = 0.
-            f_livre = f(tt, xx, tau, False)
-            f_lotado = f(tt, xx, tau, True)
-            den = f_livre[3] - f_lotado[3]
-            lam = np.clip(-f_lotado[3]/den, 0.0, 1.0) if den > 0 else 1.0
-            return lam*f_livre + (1 - lam)*f_lotado
-
-        # Função de evento de cada regime: negativa enquanto o regime vale, cruza o zero subindo na troca.
-        def evento_regime(f, ICU, tt, xx, tau, regime):
-            if regime == 'livre':
-                return xx[3] - ICU                  # H atinge a capacidade subindo.
-            if regime == 'lotado':
-                return ICU - xx[3]                  # H volta à capacidade descendo.
-            return -f(tt, xx, tau, False)[3]        # Internações ficam abaixo das altas.
-
-        # Regime quando H está exatamente na capacidade.
-        def regime_na_capacidade(f, tt, xx, tau):
-            return 'deslizante' if f(tt, xx, tau, False)[3] > 0 else 'livre'
-
-        def regime_inicial(f, ICU, tt, xx, tau):
-            if xx[3] < ICU:
-                return 'livre'
-            if xx[3] > ICU:
-                return 'lotado'
-            return regime_na_capacidade(f, tt, xx, tau)
-
-        # Aplica a troca de regime no instante do evento (altera y no lugar) e devolve o novo regime.
-        def trocar_regime(f, ICU, tt, y, tau, regime):
-            y[3] = ICU
-            novo = 'livre' if regime == 'deslizante' else regime_na_capacidade(f, tt, y, tau)
-            if novo == 'livre':
-                # Afasta H da capacidade para o evento de subida não disparar no próprio instante da troca.
-                y[3] = ICU - 1e-6
-            return novo
-
-
-        # Método Runge-Kutta (Quarta Ordem) para computar a evolução das EDO´s ao longo do tempo.
-        def RK4_lockdown(f, x0, t0, tf, dt, params,N):
-            t = np.arange(t0,tf,dt)
-            nt = t.size
-            nx = x0.size
-            x = np.zeros([nx,nt])
-            x[:,0] = x0
-             
-            # Em média, 1 a cada 20 pessoas infectadas com a COVID-19 necessita de uma UTI.
-            # O Brasil, durante os piores momentos da pandemia, disponibizou 1 UTI para cada 10000 habitantes do país.
-            # Para calcular a capacidade das UTIs ao longo do tempo.
-            ICU = (float(values['-uti-'])/10000)*N
-            icu = [ICU]*nt
-
-            # Para criar o vetor com dados da variação do número de reprodução básica ao longo do tempo.
-            r0 = params["R0"]
-            rt = [r0]
-            # Valor de tau usado em cada passo (a solução de referência segue os mesmos lockdowns).
-            taus = []
-            icu_condicao = float(values['-icu-condicao-'])
-
-            # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
-            tau = params["tau"]
-            lockdown_times = 0
-            k = 0
-            duracao_lockdown = float(values['-duracao-lockdown-'])
-            while k < nt-1:
-                # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > icu_condicao*ICU and values['-lockdown-'] == 'Yes':
-                    lockdown_times += 1
-                    count = 1
-                    # Um Lockdown de emergência dura 1 mês nessa simulação. 
-                    while count < duracao_lockdown/dt:
-                        if  k == nt-1:
-                            break
-                        tau = 0.7
-                        taus.append(tau)
-                        k1 = dt*f(t[k],x[:,k], tau)
-                        k2 = dt*f(t[k] + dt/2, x[:,k] + k1/2, tau)
-                        k3 = dt*f(t[k] + dt/2, x[:,k] + k2/2, tau)
-                        k4 = dt*f(t[k] + dt, x[:,k] + k3, tau)
-
-                        dx = (k1+2*k2+2*k3+k4)/6
-                
-                        x[:,k+1] = x[:,k] + dx
-                        
-                        # Cálculo da variação do número básico de reprodução ao longo do tempo.
-                        rt.append(r0*((1-tau)*x[0,k]/N))
-                        count += 1
-                        k += 1
-                else:       
-                    tau = params["tau"]
-                    taus.append(tau)
-
-                    k1 = dt*f(t[k],x[:,k], tau)
-                    k2 = dt*f(t[k] + dt/2, x[:,k] + k1/2, tau)
-                    k3 = dt*f(t[k] + dt/2, x[:,k] + k2/2, tau)
-                    k4 = dt*f(t[k] + dt, x[:,k] + k3, tau)
-
-                    dx = (k1+2*k2+2*k3+k4)/6
-
-                    x[:,k+1] = x[:,k] + dx
-
-                    # Cálculo da variação do número de reprodução ao longo do tempo.
-                    rt.append(r0*((1-tau)*x[0,k]/N))    
-                    k += 1   
-            return x, t, rt, icu, lockdown_times, taus
-
-        # Método euler para computar a evolução das EDO´s ao longo do tempo.
-        def euler_lockdown(f, x0, t0, tf, dt, params, N):
-            t = np.arange(t0,tf,dt)
-            nt = t.size
-            nx = x0.size
-            x = np.zeros([nx,nt])
-            
-            x[:,0] = x0
-             
-            # Em média, 1 a cada 20 pessoas infectadas com a COVID-19 necessita de uma UTI.
-            # O Brasil, durante os piores momentos da pandemia, disponibizou 1 UTI para cada 10000 habitantes do país.
-            # Para calcular a capacidade das UTIs ao longo do tempo.
-            ICU = (float(values['-uti-'])/10000)*N
-            icu = [ICU]*nt
-
-            # Para criar o vetor com dados da variação do número de reprodução básica ao longo do tempo.
-            r0 = params["R0"]
-            rt = [r0]
-            # Valor de tau usado em cada passo (a solução de referência segue os mesmos lockdowns).
-            taus = []
-            icu_condicao = float(values['-icu-condicao-'])
-
-            # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
-            tau = params["tau"]
-
-            k = 0
-            duracao_lockdown = float(values['-duracao-lockdown-'])
-            lockdown_times = 0
-            while k < nt-1:
-                # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > icu_condicao*ICU and values['-lockdown-'] == 'Yes':
-                    lockdown_times += 1
-                    count = 1
-                    # Um Lockdown de emergência dura 1 mês nessa simulação. 
-                    while count < duracao_lockdown/dt:
-                        if  k == nt-1:
-                            break
-                        tau = 0.7
-                        taus.append(tau)
-                        x[:,k+1] = (x[:,k] + dt*f(t[k],x[:,k],tau))
-
-                        # Cálculo da variação do número básico de reprodução ao longo do tempo.
-                        rt.append(r0*((1-tau)*x[0,k]/N))
-                        count += 1
-                        k += 1
-                else:       
-                    tau = params["tau"]
-                    taus.append(tau)
-                    x[:,k+1] = (x[:,k] + dt*f(t[k],x[:,k], tau))
-                    # Cálculo da variação do número de reprodução ao longo do tempo.
-                    rt.append(r0*((1-tau)*x[0,k]/N))
-                    k += 1
-            return x, t, rt, icu, lockdown_times, taus
-
-        # Método BDF: BDF de quinta ordem (VODE/SciPy) para computar a evolução das EDO´s ao longo do tempo.
-        def stiff_lockdown(f, x0, t0, tf, dt, params, N):
-            t = np.arange(t0,tf,dt)
-            nt = t.size
-            nx = x0.size
-            x = np.zeros([nx,nt])
-
-            x[:,0] = x0
-
-            # Em média, 1 a cada 20 pessoas infectadas com a COVID-19 necessita de uma UTI.
-            # O Brasil, durante os piores momentos da pandemia, disponibizou 1 UTI para cada 10000 habitantes do país.
-            # Para calcular a capacidade das UTIs ao longo do tempo.
-            ICU = (float(values['-uti-'])/10000)*N
-            icu = [ICU]*nt
-
-            # Para criar o vetor com dados da variação do número de reprodução básica ao longo do tempo.
-            r0 = params["R0"]
-            rt = [r0]
-            # Valor de tau usado em cada passo (a solução de referência segue os mesmos lockdowns).
-            taus = []
-            icu_condicao = float(values['-icu-condicao-'])
-
-            # Para calcular a porcentagem de transmisoes que se deve reduzir para controlar uma epidemia.
-            tau = params["tau"]
-
-            # Integrador BDF de quinta ordem (VODE/SciPy) - passo interno adaptativo, ordem máxima 5.
-            # O lado direito segue o regime da capacidade das UTIs (livre, lotado ou deslizante); as trocas de
-            # regime dentro do passo são localizadas por busca de raiz (brentq), como na solução de referência.
-            solver = ode(lambda tt, xx, tau, regime: campo_regime(f, tt, xx, tau, regime))
-            # atol precisa ser pequeno: no início E, I e H valem frações de pessoa, e um erro relativo nessa fase
-            # cresce com a fase exponencial e vira um atraso no pico da epidemia.
-            solver.set_integrator('vode', method='bdf', order=5, rtol=1e-8, atol=1e-9, nsteps=5000, max_step=1.0)
-            regime = regime_inicial(f, ICU, t[0], x0, tau)
-            config_atual = None
-
-            def passo_bdf5(k, tau):
-                nonlocal regime, config_atual
-                t_a, y_a = t[k], x[:,k].copy()
-                vacina = params["VacinaAtiva"] and t[k] >= params["TempoInicioVacinacao"]
-                for _ in range(1000):
-                    # Reinicia o integrador só quando tau, o regime ou a fase da vacinação mudam,
-                    # para preservar o histórico multipasso do BDF nos demais passos.
-                    if (tau, regime, vacina) != config_atual:
-                        solver.set_initial_value(y_a, t_a).set_f_params(tau, regime)
-                        config_atual = (tau, regime, vacina)
-                    y_b = solver.integrate(t[k+1])
-                    if not solver.successful():
-                        raise RuntimeError(f'BDF5 (VODE) falhou em t = {t_a}')
-                    g_b = evento_regime(f, ICU, t[k+1], y_b, tau, regime)
-                    if g_b < 0:
-                        x[:,k+1] = y_b
-                        return
-
-                    # Troca de regime dentro do passo: localiza o instante reintegrando a partir de t_a.
-                    g_a = evento_regime(f, ICU, t_a, y_a, tau, regime)
-                    def g(s):
-                        if s <= t_a:
-                            return g_a
-                        if s >= t[k+1]:
-                            return g_b
-                        solver.set_initial_value(y_a, t_a).set_f_params(tau, regime)
-                        return evento_regime(f, ICU, s, solver.integrate(s), tau, regime)
-                    t_e = t_a if g_a >= 0 else brentq(g, t_a, t[k+1], xtol=1e-6)
-                    if t_e > t_a:
-                        solver.set_initial_value(y_a, t_a).set_f_params(tau, regime)
-                        y_a = solver.integrate(t_e).copy()
-                        t_a = t_e
-                    regime = trocar_regime(f, ICU, t_a, y_a, tau, regime)
-                    config_atual = None
-                raise RuntimeError(f'BDF5 (VODE): trocas de regime demais perto de t = {t_a}')
-
-            k = 0
-            duracao_lockdown = float(values['-duracao-lockdown-'])
-            lockdown_times = 0
-            while k < nt-1:
-                # Condições para um lockdown de emergência seja acionado.
-                if x[3,k] > icu_condicao*ICU and values['-lockdown-'] == 'Yes':
-                    lockdown_times += 1
-                    count = 1
-                    # Um Lockdown de emergência dura 1 mês nessa simulação.
-                    while count < duracao_lockdown/dt:
-                        if  k == nt-1:
-                            break
-                        tau = 0.7
-                        taus.append(tau)
-                        passo_bdf5(k, tau)
-
-                        # Cálculo da variação do número básico de reprodução ao longo do tempo.
-                        rt.append(r0*((1-tau)*x[0,k]/N))
-                        count += 1
-                        k += 1
-                else:
-                    tau = params["tau"]
-                    taus.append(tau)
-                    passo_bdf5(k, tau)
-
-                    # Cálculo da variação do número de reprodução ao longo do tempo.
-                    rt.append(r0*((1-tau)*x[0,k]/N))
-                    k += 1
-            return x, t, rt, icu, lockdown_times, taus
-
-
-        # Solução de referência para medir o erro do método numérico escolhido.
-        # Usa LSODA (o mesmo integrador do odeint) com tolerâncias apertadas, a mesma sequência de tau
-        # (lockdowns) do método escolhido e os regimes da capacidade das UTIs, com as trocas de regime
-        # localizadas por detecção de eventos.
-        def solucao_referencia(f, x0, t, taus, ICU, params):
-            nt = t.size
-            x_ref = np.zeros([x0.size, nt])
-            x_ref[:,0] = x0
-            regime = regime_inicial(f, ICU, t[0], x0, taus[0])
-
-            # Trechos com tau constante, divididos também no início da vacinação (descontinuidade no tempo).
-            cortes = [0] + [k for k in range(1, nt-1) if taus[k] != taus[k-1]]
-            if params["VacinaAtiva"]:
-                kv = int(np.searchsorted(t, params["TempoInicioVacinacao"]))
-                if 0 < kv < nt-1:
-                    cortes.append(kv)
-            cortes = sorted(set(cortes)) + [nt-1]
-
-            for a, b in zip(cortes[:-1], cortes[1:]):
-                tau = taus[a]
-                t_atual, y = t[a], x_ref[:,a].copy()
-                k_prox = a + 1  # Próximo ponto da malha a ser preenchido.
-                if evento_regime(f, ICU, t_atual, y, tau, regime) >= 0:
-                    regime = trocar_regime(f, ICU, t_atual, y, tau, regime)
-                n_eventos = 0
-                while k_prox <= b:
-                    campo = lambda tt, xx, tau=tau, regime=regime: campo_regime(f, tt, xx, tau, regime)
-                    evento = lambda tt, xx, tau=tau, regime=regime: evento_regime(f, ICU, tt, xx, tau, regime)
-                    evento.terminal, evento.direction = True, 1
-                    sol = solve_ivp(campo, (t_atual, t[b]), y, method='LSODA', t_eval=t[k_prox:b+1],
-                                    events=evento, rtol=1e-10, atol=1e-8, max_step=0.01)
-                    if sol.status == -1:
-                        raise RuntimeError(f'Solução de referência falhou em t = {t_atual}: {sol.message}')
-                    # sol.t fica vazio (lista) quando o evento ocorre antes do próximo ponto da malha.
-                    n = len(sol.t)
-                    if n > 0:
-                        x_ref[:, k_prox:k_prox + n] = sol.y
-                    k_prox += n
-                    if sol.status == 0:
-                        break
-
-                    # Evento: troca de regime na capacidade das UTIs.
-                    t_atual, y = sol.t_events[0][0], sol.y_events[0][0].copy()
-                    regime = trocar_regime(f, ICU, t_atual, y, tau, regime)
-                    n_eventos += 1
-                    if n_eventos > 1000:
-                        raise RuntimeError(f'Solução de referência: trocas de regime demais perto de t = {t_atual}')
-            return x_ref
-
-
-        # Helpers de Vacinação
-        vacinacao_ativa = values['-vacinacao-'] == 'Yes'
-        tempo_inicio_vacinacao_anos = float(values['-tempo-vacinacao-']) if vacinacao_ativa else 0.0
-        tempo_inicio_vacinacao_dias = tempo_inicio_vacinacao_anos * 365
-
-
-        # Parâmetros - Tempo em dias
-        t_incubacao = float(values['-incubacao-']) # 5.1
-        t_infeccao = float(values['-infeccao-']) # 3.3
-        t_imunidade_natural = float(values['-imunidadeNatural-']) # 365
-        t_imunidade_vacinados = float(values['-imunidadeVacinados-']) 
-
-        # Parâmetros - Taxas diárias
-        tx_internacao = float(values['-internacao-']) # 0.05
-        tx_mortalidade_hospitalizados = float(values['-mortalidadeHospitalizados-']); #30% dos hospitalizados falecem
-        tx_mortalidade_infectados = float(values['-mortalidadeInfectados-']); 
-        tx_mortalidade_natural = float(values['-mortalidadeNatural-']); 
-        tx_efetividade = float(values['-taxa-efetividade-']) if vacinacao_ativa else 0.0
-        tx_vacinacao = float(values['-taxa-vacinacao-']) if vacinacao_ativa else 0.0 # 0.2% da população é vacinada por dia
-        tx_suscetiveis_externos = float(values['-suscetíveisExternos-'])
-        tx_expostos_externos = float(values['-expostosExternos-'])
-        tx_recuperados_externos = float(values['-recuperadosExternos-'])
-                
-        # Número de Reprodução Básica.
-        R0 = float(values['-repr-']) # 2.5
-
-        # População
-        N = int(values['-popsize-']) # 20000000
-
-        # Aumento Populacional - diário
-        nascimentos = float(values['-nascimentos-'])
-        imigracao = float(values['-imigracao-'])
-
-        # Nivel de distanciamento social.
-        # 0.0 - Interação social sem restrições;
-        # 0.7 - Lockdown(na prática);
-        # 1.0 - Isolamento total(ideal).
-        u = float(values['-distance-']) # 0.2
-
-        ICU = (float(values['-uti-'])/10000)*N
-
-        # Parâmetros da modelagem SEIHRVS.
-        params = {'R0': R0, 'Sigma': nascimentos , 'Epsillon': imigracao, 'ZetaS': tx_suscetiveis_externos, 'ZetaE': tx_expostos_externos, 'zetaR': tx_recuperados_externos , 'Alpha': 1/t_incubacao, 'Beta': R0/t_infeccao,'GammaI':1/t_infeccao, 'Delta':tx_internacao, 'GammaH':(1-tx_mortalidade_hospitalizados), 'Pi':tx_mortalidade_natural, 'MuI':tx_mortalidade_infectados, 'MuH':tx_mortalidade_hospitalizados, 'OmegaR':1/(t_imunidade_natural*365), 'OmegaV':1/(t_imunidade_vacinados*365),'v': tx_vacinacao, 'e': tx_efetividade,'tau': u, 'VacinaAtiva': vacinacao_ativa, 'TempoInicioVacinacao': tempo_inicio_vacinacao_dias}
-
-        f = lambda t, x, u, sobrecapacidade=None : SEIHRVS_MODEL(x, t, params, N, u, ICU, sobrecapacidade)
-
-        # Condições iniciais do modelo.
-        e0 = int(values['-E0-'])
-        i0 = int(values['-I0-'])
-        h0 = int(values['-H0-'])
-        r0 = int(values['-R0-'])
-        v0 = int(values['-V0-'])
-        s0 = N - e0 -i0 - r0 - h0 - v0
-        SEIHRVS_0 = np.array([s0,e0,i0,h0,r0,v0, 0.0, 0.0])
-
-        # Tempo de simulação e passo.
-        t0 = 0
-        tf = 365*int(values['-time-'])
-        dt = 1
-
-        if values['-numerical-methods-'] == "Runge-Kutta":
-            # Cálculo de Runge-Kutta.
-            x,t,rt,icu,lockdown_times,taus = RK4_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
-        elif values['-numerical-methods-'] == "BDF":
-            # Cálculo por BDF de quinta ordem (VODE/SciPy).
-            x,t,rt,icu,lockdown_times,taus = stiff_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
+# Mapeamento dos Índices no Vetor de Estado Etário
+# Grupos Etários: 0 -> 0-4a, 1 -> 5-29a, 2 -> 30-59a (60a+ alocados em R na condição inicial)
+IDX_S  = (0, 1, 2)
+IDX_S1 = (3, 4, 5)
+IDX_V  = (6, 7, 8)
+
+# Compartimentos Clínicos e Desfechos
+IDX_E     = 9
+IDX_I     = 10
+IDX_H     = 11
+IDX_C     = 12
+IDX_R     = 13
+IDX_D_NAT = 14
+IDX_D_DIS = 15
+
+N_VIVOS = 14
+N_COMPARTIMENTOS = 16
+
+# Frações de 0-4, 5-29 e 30-59 anos em 2016 (projeção IBGE, edição 2024); o restante é 60+
+FRACOES_POPULACAO = (14705019 / 203871925, 80916904 / 203871925, 82378614 / 203871925)
+
+# Importação de casos, cenário 2007-2026 de parametros/estimar_importacao.py
+MU_IMPORTACAO = 2.532  # eventos/ano
+TAMANHOS_IMPORTACAO = [1] * 21 + [2] * 7 + [3] * 3 + [4] * 7 + [5, 6, 6, 9, 14, 18, 18, 24, 33, 40, 41, 133]
+
+
+def sobrevivencia_media(pi_taxa, tau):
+    # A(tau): integral de exp(-pi*a) para a de 0 até tau
+    if pi_taxa == 0:
+        return tau
+    return (1.0 - np.exp(-pi_taxa * tau)) / pi_taxa
+
+
+def beta_de_R0(R0, params):
+    # R0 = beta * exp(-pi*tau_E) * [pH*A(tau_IH) + (1-pH)*A(tau_IR)]
+    pi_taxa = params["Pi"]
+    permanencia_I = (params["pH"] * sobrevivencia_media(pi_taxa, params["tau_IH"]) +
+                     (1.0 - params["pH"]) * sobrevivencia_media(pi_taxa, params["tau_IR"]))
+    return R0 / (np.exp(-pi_taxa * params["tau_E"]) * permanencia_I)
+
+
+def sortear_epsilon(mu_ano, tamanhos, nt, dt, rng):
+    # Eventos de importação: a cada ano, número de eventos ~ Poisson(mu_ano);
+    # dia uniforme no ano e n_k sorteado de tamanhos
+    eps = np.zeros(nt)
+    passos_ano = int(round(365 / dt))
+    for inicio in range(0, nt, passos_ano):
+        passos = min(passos_ano, nt - inicio)
+        n_eventos = rng.poisson(mu_ano * passos / passos_ano)
+        if n_eventos > 0:
+            dias = rng.integers(inicio, inicio + passos, n_eventos)
+            np.add.at(eps, dias, rng.choice(tamanhos, n_eventos) / dt)
+    return eps
+
+
+def faixas_de_N(N):
+    # (0-4a, 5-29a, 30-59a, 60a+) a partir do total, com as frações de 2016
+    N_g1, N_g2, N_g3 = (int(N * f) for f in FRACOES_POPULACAO)
+    return N_g1, N_g2, N_g3, N - (N_g1 + N_g2 + N_g3)
+
+
+def condicao_inicial(faixas, E0, I0, H0, C0):
+    N_g1, N_g2, N_g3, N_60 = faixas
+
+    x0 = np.zeros(N_COMPARTIMENTOS)
+    x0[IDX_E], x0[IDX_I], x0[IDX_H], x0[IDX_C] = E0, I0, H0, C0
+    x0[IDX_S[0]] = N_g1 - (E0 + I0 + H0 + C0)
+    x0[IDX_S[1]] = N_g2
+    x0[IDX_S[2]] = N_g3
+    x0[IDX_R] = N_60
+    return x0
+
+
+def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
+    t = np.arange(t0, tf, dt)
+    nt = t.size
+    pi_taxa, Lambda = params["Pi"], params["Lambda"]
+    pH, pC, d = params["pH"], params["pC"], params["d"]
+    e1, e2 = params["e1"], params["e2"]
+    c1, c2 = params["c1"], (params["c2_1"], params["c2_2"])
+    v1 = (params["v1_2"], params["v1_3"])
+    tau_v2 = (params["tau_v2_1"], params["tau_v2_2"])
+    tau_E, tau_IH, tau_IR = params["tau_E"], params["tau_IH"], params["tau_IR"]
+    tau_HC, tau_HR, tau_HD = params["tau_HC"], params["tau_HR"], params["tau_HD"]
+    tau_CR, tau_CD, tau_D1 = params["tau_CR"], params["tau_CD"], params["tau_D1"]
+    beta = beta_de_R0(params["R0"], params)
+    icu_10mil = params["ICU"]
+
+    if epsilon is None:
+        epsilon = np.zeros(nt)
+
+    def A(tau):
+        return sobrevivencia_media(pi_taxa, tau)
+
+    def S_exp(tau):
+        return np.exp(-pi_taxa * tau)
+
+    # História inicial: entradas constantes para t < t0, coerentes com os estoques em t0
+    pre_E = x0[IDX_E] / A(tau_E)
+    pre_I = x0[IDX_I] / (pH * A(tau_IH) + (1.0 - pH) * A(tau_IR))
+    pre_H = x0[IDX_H] / ((1.0 - pC) * A(tau_HR) + pC * A(tau_HC))
+    pre_C = x0[IDX_C] / ((1.0 - d) * A(tau_CR) + d * A(tau_CD))
+
+    # Séries das entradas de cada passo, usadas pelos fluxos atrasados
+    ent_E = np.zeros(nt)
+    ent_I = np.zeros(nt)
+    ent_H = np.zeros(nt)
+    ent_C = np.zeros(nt)
+    sem_leito = np.zeros(nt)
+    falha_g1 = np.zeros(nt)
+    falha_g2 = np.zeros(nt)
+    risco_acum = np.zeros(nt)  # integral de (pi + lambda)
+
+    def atrasado(serie, k, tau, pre):
+        # Média da entrada constante por passo na janela [t_k - tau, t_k - tau + dt]:
+        # toda a massa que entra sai depois do atraso, mesmo com tau fracionário
+        pos = min(k - tau / dt, k - 1.0)
+        i = int(np.floor(pos))
+        frac = pos - i
+        anterior = pre if i < 0 else serie[i]
+        seguinte = pre if i + 1 < 0 else serie[i + 1]
+        return (1.0 - frac) * anterior + frac * seguinte
+
+    def sobrevive_infeccao(k, tau):
+        # exp(-integral de (pi + lambda) em [t - tau, t]); antes de t0, lambda = 0
+        pos = k - tau / dt
+        if pos < 0:
+            passado = pi_taxa * pos * dt
         else:
-            # Cálculo de Euler
-            x,t,rt,icu,lockdown_times,taus = euler_lockdown(f, SEIHRVS_0, t0, tf, dt, params, N)
+            i = int(np.floor(pos))
+            frac = pos - i
+            seguinte = risco_acum[min(i + 1, k)]
+            passado = (1.0 - frac) * risco_acum[i] + frac * seguinte
+        return np.exp(-(risco_acum[k] - passado))
 
-        # Solução de referência (LSODA com eventos), com os mesmos lockdowns do método escolhido.
-        x_ref = solucao_referencia(f, SEIHRVS_0, t, taus, ICU, params)
-                                  
-        symbol = ['S','E','I','H','R','V']
+    def fluxos_atrasados(k, x_k, icu_k):
+        # Fluxos que dependem só do passado: constantes dentro do passo
+        f = {}
+        # FLUXOS VACINAIS PNI BRASIL
+        # Grupo 1 (0-4a): coorte que completa 12 meses
+        f["d1_g1"] = c1 * Lambda * sobrevive_infeccao(k, tau_D1)
+        f["d2_g1"] = e2 * c2[0] * atrasado(falha_g1, k, tau_v2[0], 0.0) * sobrevive_infeccao(k, tau_v2[0])
+        # Grupo 2 (5-29a)
+        f["d2_g2"] = e2 * c2[1] * atrasado(falha_g2, k, tau_v2[1], 0.0) * sobrevive_infeccao(k, tau_v2[1])
 
-        print("RELATÓRIO DE SIMULAÇÃO")
-        print("==================================================")
-        print("Vacinação: ", vacinacao_ativa)
-        if(vacinacao_ativa):
-            print("Tempo de início da vacinação: {:.1f} anos".format(tempo_inicio_vacinacao_anos))
-        print("LockDown: ", values['-lockdown-'])
-        if(values['-lockdown-'] == 'Yes'):
-            print("Número de vezes que o lockdown foi acionado: ", lockdown_times)
-        print('Quantidade de leitos de UTI disponíveis: {}'.format(int(ICU)))
-        print("Passo utilizado(h): ", dt)
-        print("Método numérico utilizado: ", values['-numerical-methods-'])
-        if values['-numerical-methods-'] == "BDF":
-            print("Integrador: BDF ordem 5 (VODE/SciPy), passo interno adaptativo, trocas de regime das UTIs por eventos")
-        print("==================================================")
-        print('Número total de óbitos ao final da simulação: ', x[6,-1] + x[7,-1]) 
-        print('Número total de óbitos por causas naturais ao final da simulação: ', x[6,-1])
-        print('Número total de óbitos pela doença ao final da simulação: ', x[7,-1])
-        print('Número total de pessoas recuperadas ao final da simulação: ', x[4,-1])
-        print('Número total de pessoas vacinadas ao final da simulação: ', x[5,-1])
-        print('Número total de pessoas suscetíveis ao final da simulação: ', x[0,-1])
-        print('Número total de pessoas expostas ao final da simulação: ', x[1,-1])
-        print('Número total de pessoas infectadas ao final da simulação: ', x[2,-1])
-        print('Número de pessoas hospitalizadas ao final da simulação: ', x[3,-1])
-        print('Pico de pessoas hospitalizadas: ', max(x[3,:]))
-        print("==================================================")
-            
-        # Calculando o erro quadrático médio do método numérico selecionado em relação à solução de referência.
-        msr = []
-        for i in range(0, 6):
-            msr.append(((x[i,:] - x_ref[i,:])**2).mean(axis=None))
-            txt = f"Erro quadrático médio {symbol[i]} - {values['-numerical-methods-']} e referência (LSODA): "
-            print(txt, msr[i])
-        print()
-        
-        # Plotando dos gráficos.
-        fig, ax = plt.subplots(2, 1)
-        
-        # Gráfico da simulação epidemiológica SEIHRVS.
-        model_name = 'SEIHRVS' if vacinacao_ativa else 'SEIHRS'
-        ax[0].set_title(f'Simulação epidemiológica {model_name} - {values['-numerical-methods-']}')
-        ax[0].plot(t/365, x[0,:], 'r', label = 'S')
-        ax[0].plot(t/365, x[1,:], 'g', label = 'E')
-        ax[0].plot(t/365, x[2,:], 'b', label = 'I')
-        ax[0].plot(t/365, x[3,:], 'm', label = 'H')
-        ax[0].plot(t/365, x[4,:], 'y', label = 'R')
-        if vacinacao_ativa:
-            ax[0].plot(t/365, x[5,:], 'c', label = 'V')
-            ax[0].axvline(tempo_inicio_vacinacao_anos, color='k', linestyle='-', linewidth=1.5, label='Início da vacinação')
-        ax[0].plot(t/365, icu, linestyle = '--', color = 'k', label = 'Capacidade das UTIs')
-        ax[0].set_xlabel('tempo(anos)')
-        ax[0].set_ylabel('População')
-        ax[0].grid()
-        ax[0].legend()
-        
-        # Gráfico da variação do número de reprodução básica ao longo do tempo.
-        ax[1].set_title('Número de Reprodução')
-        ax[1].plot(t/365, rt, label = 'RT')
-        ax[1].set_xlabel('tempo(anos)')
-        ax[1].grid()
-        ax[1].legend()
-        
+        # Progressão Clínica
+        f["E_I"] = atrasado(ent_E, k, tau_E, pre_E) * S_exp(tau_E)
+        f["I_H"] = pH * atrasado(ent_I, k, tau_IH, pre_I) * S_exp(tau_IH)
+        f["I_R"] = (1.0 - pH) * atrasado(ent_I, k, tau_IR, pre_I) * S_exp(tau_IR)
 
-        plt.subplots_adjust(hspace=0.8)
-        plt.show()
+        # Admissão limitada aos leitos livres: quem excede a capacidade fica sem leito
+        potencial = pC * atrasado(ent_H, k, tau_HC, pre_H) * S_exp(tau_HC)
+        livres = max(icu_k - x_k[IDX_C], 0.0)
+        f["H_C"] = min(potencial, livres / dt)
+        f["sem_leito"] = potencial - f["H_C"]
+        f["H_D"] = atrasado(sem_leito, k, tau_HD, 0.0) * S_exp(tau_HD)
+        f["H_R"] = (1.0 - pC) * atrasado(ent_H, k, tau_HR, pre_H) * S_exp(tau_HR)
 
-window.close()
+        f["C_R"] = (1.0 - d) * atrasado(ent_C, k, tau_CR, pre_C) * S_exp(tau_CR)
+        f["C_D"] = d * atrasado(ent_C, k, tau_CD, pre_C) * S_exp(tau_CD)
+        return f
+
+    def derivadas(z, t_atual, f, eps_k, fim_semente):
+        x = z[:N_COMPARTIMENTOS]
+        I = x[IDX_I]
+        N_t = x[:N_VIVOS].sum()
+
+        # Corte de transmissão: I < 1 não transmite, salvo na janela infecciosa de uma semente
+        ativo = I >= 1.0 or t_atual <= fim_semente
+        lam = beta * I / N_t if ativo else 0.0
+
+        S, S1, V = x[list(IDX_S)], x[list(IDX_S1)], x[list(IDX_V)]
+        d1_g2 = v1[0] * S[1]
+        d1_g3 = v1[1] * S[2]
+        ent_E_t = lam * (S.sum() + S1.sum())
+
+        dz = np.zeros(z.size)
+        # Grupo 1
+        dz[IDX_S[0]]  = Lambda - lam * S[0] - f["d1_g1"] - pi_taxa * S[0]
+        dz[IDX_S1[0]] = (1.0 - e1) * f["d1_g1"] - lam * S1[0] - f["d2_g1"] - pi_taxa * S1[0]
+        dz[IDX_V[0]]  = e1 * f["d1_g1"] + f["d2_g1"] - pi_taxa * V[0]
+        # Grupo 2
+        dz[IDX_S[1]]  = - lam * S[1] - d1_g2 - pi_taxa * S[1]
+        dz[IDX_S1[1]] = (1.0 - e1) * d1_g2 - lam * S1[1] - f["d2_g2"] - pi_taxa * S1[1]
+        dz[IDX_V[1]]  = e1 * d1_g2 + f["d2_g2"] - pi_taxa * V[1]
+        # Grupo 3 (Dose Única)
+        dz[IDX_S[2]]  = - lam * S[2] - d1_g3 - pi_taxa * S[2]
+        dz[IDX_S1[2]] = (1.0 - e1) * d1_g3 - lam * S1[2] - pi_taxa * S1[2]  # Sem D2
+        dz[IDX_V[2]]  = e1 * d1_g3 - pi_taxa * V[2]
+
+        # Progressão Clínica
+        dz[IDX_E] = ent_E_t - f["E_I"] - pi_taxa * x[IDX_E]
+        dz[IDX_I] = f["E_I"] + eps_k - f["I_H"] - f["I_R"] - pi_taxa * I
+        dz[IDX_H] = f["I_H"] - f["H_C"] - f["H_D"] - f["H_R"] - pi_taxa * x[IDX_H]
+        dz[IDX_C] = f["H_C"] - f["C_R"] - f["C_D"] - pi_taxa * x[IDX_C]
+        dz[IDX_R] = f["I_R"] + f["H_R"] + f["C_R"] - pi_taxa * x[IDX_R]
+
+        dz[IDX_D_NAT] = pi_taxa * N_t
+        dz[IDX_D_DIS] = f["H_D"] + f["C_D"]
+
+        # Integrais do passo, gravadas nas séries depois do RK4
+        dz[N_COMPARTIMENTOS] = ent_E_t
+        dz[N_COMPARTIMENTOS + 1] = (1.0 - e1) * d1_g2
+        dz[N_COMPARTIMENTOS + 2] = lam
+        return dz
+
+    x = np.zeros([N_COMPARTIMENTOS, nt])
+    x[:, 0] = x0
+    rt = np.zeros(nt)
+    icu = np.zeros(nt)
+
+    # Sementes iniciais em E ou I transmitem até o fim da primeira janela infecciosa
+    fim_semente = (t0 + tau_E + tau_IR) if (x0[IDX_E] + x0[IDX_I]) > 0 else t0 - 1.0
+
+    for k in range(nt):
+        xk = x[:, k]
+        N_t = xk[:N_VIVOS].sum()
+        icu[k] = icu_10mil / 10000 * N_t
+
+        S_tot = xk[list(IDX_S)].sum() + xk[list(IDX_S1)].sum()
+        rt[k] = params["R0"] * S_tot / N_t
+
+        if k == nt - 1:
+            break
+
+        if epsilon[k] > 0:
+            fim_semente = max(fim_semente, t[k] + tau_IR)
+
+        f = fluxos_atrasados(k, xk, icu[k])
+        ent_I[k] = f["E_I"] + epsilon[k]
+        ent_H[k] = f["I_H"]
+        ent_C[k] = f["H_C"]
+        sem_leito[k] = f["sem_leito"]
+        falha_g1[k] = (1.0 - e1) * f["d1_g1"]
+
+        # RK4: fluxos atrasados e epsilon ficam constantes dentro do passo
+        args = (f, epsilon[k], fim_semente)
+        z = np.concatenate([xk, np.zeros(3)])
+        k1 = dt * derivadas(z, t[k], *args)
+        k2 = dt * derivadas(z + k1 / 2, t[k] + dt / 2, *args)
+        k3 = dt * derivadas(z + k2 / 2, t[k] + dt / 2, *args)
+        k4 = dt * derivadas(z + k3, t[k] + dt, *args)
+        z_novo = z + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+
+        x[:, k + 1] = z_novo[:N_COMPARTIMENTOS]
+        ent_E[k] = z_novo[N_COMPARTIMENTOS] / dt
+        falha_g2[k] = z_novo[N_COMPARTIMENTOS + 1] / dt
+        risco_acum[k + 1] = risco_acum[k] + dt * pi_taxa + z_novo[N_COMPARTIMENTOS + 2]
+
+    # Entradas por dia em cada compartimento, para comparar com séries de eventos
+    if fluxos is not None:
+        fluxos.update(ent_I=ent_I, ent_H=ent_H, ent_C=ent_C)
+
+    return x, t, rt, icu
+
+
+def main():
+    import PySimpleGUI as sg
+    import matplotlib.pyplot as plt
+
+    # Tema da interface gráfica
+    sg.theme('Default1')
+
+    font_size = 8
+    font_style = 'Helvetica'
+    fonte = (font_style, font_size)
+    fonte_titulo = (font_style, font_size + 2)
+    sg.set_options(font=fonte)
+
+    # Layout da Interface Gráfica
+    left_col = [
+        [sg.Text('Parâmetros Gerais e Demográficos:', font=fonte_titulo)],
+        [sg.Text('Tamanho da população (N):')],
+        [sg.Slider(range=(0, 8e9), default_value=213421037, resolution=10000, size=(45, 10), orientation='horizontal', key='-popsize-')],
+        [sg.Text('Nascimentos (Λ diário):')],
+        [sg.Slider(range=(0, 2e5), default_value=1000, resolution=1, size=(45, 10), orientation='horizontal', key='-nascimentos-')],
+        [sg.Text('R0 (Número de Reprodução Básica):')],
+        [sg.Slider(range=(0, 25), default_value=12, resolution=0.1, size=(45, 10), orientation='horizontal', key='-repr-')],
+        [sg.Text('Tempo de Simulação (anos):')],
+        [sg.Slider(range=(0, 20), default_value=5, resolution=1, size=(45, 10), orientation='horizontal', key='-time-')],
+        [sg.Text('Taxa de mortalidade natural (dias - π): '), sg.Slider(range=(0, 1e-4), default_value=2e-5, resolution=1e-5, size=(10, 10), orientation='horizontal', key='-mortalidadeNatural-')],
+        [sg.Text('Importação de Casos (ε):', font=fonte_titulo)],
+        [sg.Text('Frequência de eventos μ (eventos/ano):')],
+        [sg.Slider(range=(0, 20), default_value=MU_IMPORTACAO, resolution=0.001, size=(45, 10), orientation='horizontal', key='-mu-')],
+        [sg.Text('Casos por evento (n_k): sorteados dos eventos do SINAN')],
+    ]
+
+    middle_col = [
+        [sg.Text('Regras de Vacinação (PNI / MS Brasil):', font=fonte_titulo)],
+        [sg.Text('Vacinação Ativa: '), sg.Spin(values=('No', 'Yes'), initial_value='Yes', size=(5, 10), key='-vacinacao-')],
+        [sg.Text('Eficácia 1ª Dose (e1): '), sg.Slider(range=(0, 1), default_value=0.93, resolution=0.01, size=(30, 10), orientation='horizontal', key='-efetividade1-')],
+        [sg.Text('Eficácia 2ª Dose nas falhas (e2): '), sg.Slider(range=(0, 1), default_value=0.571, resolution=0.001, size=(30, 10), orientation='horizontal', key='-efetividade2-')],
+        [sg.Text('Cobertura D1 aos 12 meses (c1): '), sg.Slider(range=(0, 1), default_value=1, resolution=0.01, size=(30, 10), orientation='horizontal', key='-c1-')],
+        [sg.Text('Cobertura D2 Infantil (c2,1): '), sg.Slider(range=(0, 1), default_value=1, resolution=0.01, size=(30, 10), orientation='horizontal', key='-c2_1-')],
+        [sg.Text('Cobertura D2 5-29 anos (c2,2): '), sg.Slider(range=(0, 1), default_value=1, resolution=0.01, size=(30, 10), orientation='horizontal', key='-c2_2-')],
+        [sg.Text('Intervalo D1->D2 Infantil (90 dias): '), sg.Text('Fixo aos 15m (Tetraviral)')],
+        [sg.Text('Intervalo D1->D2 5-29 anos (30 dias): '), sg.Text('Fixo (Catch-up / Surtos)')],
+        [sg.Text('Faixa 30-59 anos: '), sg.Text('Dose Única (Sem D2)')],
+
+        [sg.Text('Dinâmica Hospitalar:', font=fonte_titulo)],
+        [sg.Text('UTIs disponíveis (por 10 mil hab):')],
+        [sg.Slider(range=(0, 20), default_value=2.43, resolution=0.01, size=(45, 10), orientation='horizontal', key='-uti-')],
+        [sg.Text('Fração de I hospitalizada (p_H):')],
+        [sg.Slider(range=(0, 1), default_value=0.2, resolution=0.001, size=(45, 10), orientation='horizontal', key='-pH-')],
+        [sg.Text('Fração para UTI (p_C):')],
+        [sg.Slider(range=(0, 1), default_value=0.032, resolution=0.001, size=(45, 10), orientation='horizontal', key='-pC-')],
+        [sg.Text('Letalidade UTI (d):')],
+        [sg.Slider(range=(0, 1), default_value=0.0804, resolution=0.0001, size=(45, 10), orientation='horizontal', key='-letalidadeUTI-')],
+    ]
+
+    atrasos_col = [
+        [sg.Text('Atrasos Clínicos (dias):', font=fonte_titulo)],
+        [sg.Text('τ_E (E→I): '), sg.Slider(range=(1, 30), default_value=12.5, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauE-')],
+        [sg.Text('τ_IH (I→H, SINAN): '), sg.Slider(range=(1, 30), default_value=4.23, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauIH-')],
+        [sg.Text('τ_IR (I→R): '), sg.Slider(range=(1, 30), default_value=8, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauIR-')],
+        [sg.Text('τ_HC (H→C): '), sg.Slider(range=(1, 30), default_value=6.7, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauHC-')],
+        [sg.Text('τ_HR (H→R): '), sg.Slider(range=(1, 30), default_value=4.47, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauHR-')],
+        [sg.Text('τ_HD (H→D): '), sg.Slider(range=(1, 30), default_value=4.8, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauHD-')],
+        [sg.Text('τ_CR (C→R): '), sg.Slider(range=(1, 60), default_value=14, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauCR-')],
+        [sg.Text('τ_CD (C→D): '), sg.Slider(range=(1, 60), default_value=7.9, resolution=0.01, size=(20, 10), orientation='horizontal', key='-tauCD-')],
+    ]
+
+    right_col = [
+        [sg.Text('Condições Iniciais:', font=fonte_titulo)],
+        [sg.Text('Expostos (E):')],
+        [sg.Slider(range=(0, 2e6), default_value=1, resolution=1, size=(45, 10), orientation='horizontal', key='-E_0-')],
+        [sg.Text('Infecciosos (I):')],
+        [sg.Slider(range=(0, 2e6), default_value=0, resolution=1, size=(45, 10), orientation='horizontal', key='-I_0-')],
+        [sg.Text('Hospitalizados Enfermaria (H):')],
+        [sg.Slider(range=(0, 2e6), default_value=0, resolution=1, size=(45, 10), orientation='horizontal', key='-H0-')],
+        [sg.Text('Pacientes em UTI (C):')],
+        [sg.Slider(range=(0, 2e6), default_value=0, resolution=1, size=(45, 10), orientation='horizontal', key='-C0-')],
+    ]
+
+    corpo = [
+        [
+            sg.Column(left_col, vertical_alignment='top'),
+            sg.Column(middle_col, vertical_alignment='top'),
+            sg.Column(atrasos_col, vertical_alignment='top'),
+            sg.Column(right_col, vertical_alignment='top'),
+        ]
+    ]
+
+    largura_tela, altura_tela = sg.Window.get_screen_size()
+    tamanho_corpo = (min(1500, int(largura_tela*0.95)), min(900, int(altura_tela*0.80)))
+
+    layout = [
+        [sg.Column(corpo, key='-corpo-', size=tamanho_corpo, scrollable=True, vertical_scroll_only=True)],
+        [sg.Button('Ok'), sg.Button('Cancel')]
+    ]
+
+    window = sg.Window('Modelo SEIHRVS - DDE Etário (MS Brasil / PNI)', layout, resizable=True, finalize=True)
+    window['-corpo-'].expand(True, True)
+
+    while True:
+        event, values = window.read()
+
+        if event == sg.WIN_CLOSED or event == 'Cancel':
+            break
+        if event == 'Ok':
+            vacinacao_ativa = values['-vacinacao-'] == 'Yes'
+
+            N = int(values['-popsize-'])
+            t0 = 0
+            tf = 365 * int(values['-time-'])
+            dt = 1.0
+
+            params = {
+                'R0': float(values['-repr-']),
+                'Pi': float(values['-mortalidadeNatural-']),
+                'Lambda': float(values['-nascimentos-']),
+                'tau_E': float(values['-tauE-']),
+                'tau_IH': float(values['-tauIH-']),
+                'tau_IR': float(values['-tauIR-']),
+                'tau_HC': float(values['-tauHC-']),
+                'tau_HR': float(values['-tauHR-']),
+                'tau_HD': float(values['-tauHD-']),
+                'tau_CR': float(values['-tauCR-']),
+                'tau_CD': float(values['-tauCD-']),
+                'pH': float(values['-pH-']),
+                'pC': float(values['-pC-']),
+                'd': float(values['-letalidadeUTI-']),
+                'tau_D1': 365.0,
+                'tau_v2_1': 90.0,
+                'tau_v2_2': 30.0,
+                'e1': float(values['-efetividade1-']),
+                'e2': float(values['-efetividade2-']),
+                'c1': float(values['-c1-']) if vacinacao_ativa else 0.0,
+                'c2_1': float(values['-c2_1-']) if vacinacao_ativa else 0.0,
+                'c2_2': float(values['-c2_2-']) if vacinacao_ativa else 0.0,
+                'v1_2': 0.002 if vacinacao_ativa else 0.0,
+                'v1_3': 0.001 if vacinacao_ativa else 0.0,
+                'ICU': float(values['-uti-']),
+            }
+
+            x0 = condicao_inicial(faixas_de_N(N), float(values['-E_0-']), float(values['-I_0-']),
+                                  float(values['-H0-']), float(values['-C0-']))
+
+            rng = np.random.default_rng()
+            nt = np.arange(t0, tf, dt).size
+            epsilon = sortear_epsilon(float(values['-mu-']), TAMANHOS_IMPORTACAO, nt, dt, rng)
+
+            x, t, rt, icu = simular(x0, t0, tf, dt, params, epsilon)
+
+            print("RELATÓRIO DE SIMULAÇÃO (DDE ETÁRIO - MS BRASIL / PNI)")
+            print("==================================================")
+            print("Vacinação PNI Ativa: ", vacinacao_ativa)
+            print(f"UTIs Disponíveis: {int(icu[0])}")
+            print('Casos importados: ', int(epsilon.sum() * dt))
+            print("==================================================")
+            print('Óbitos totais: ', int(x[IDX_D_NAT, -1] + x[IDX_D_DIS, -1]))
+            print('Óbitos por sarampo: ', int(x[IDX_D_DIS, -1]))
+
+            V_tot_curve = x[list(IDX_V), :].sum(axis=0)
+            print('População Imunizada Total (V): ', int(V_tot_curve[-1]))
+            print('Pico em UTI (C): ', int(max(x[IDX_C, :])))
+            print("==================================================")
+
+            fig, ax = plt.subplots(2, 1, figsize=(10, 8))
+
+            S_tot_curve = x[list(IDX_S), :].sum(axis=0) + x[list(IDX_S1), :].sum(axis=0)
+
+            ax[0].set_title('Simulação Epidemiológica DDE - Faixas Etárias e PNI Brasil')
+            ax[0].plot(t/365, S_tot_curve, 'red', label='Suscetíveis Totais (S + S1)')
+            ax[0].plot(t/365, V_tot_curve, 'cyan', label='V (Vacinados D1/D2)')
+            ax[0].plot(t/365, x[IDX_E, :], 'green', label='E (Expostos)')
+            ax[0].plot(t/365, x[IDX_I, :], 'blue', label='I (Infecciosos)')
+            ax[0].plot(t/365, x[IDX_H, :], 'magenta', label='H (Enfermaria)')
+            ax[0].plot(t/365, x[IDX_C, :], 'darkred', linewidth=1.5, label='C (UTI)')
+            ax[0].plot(t/365, icu, linestyle='--', color='black', label='Capacidade de UTI')
+            ax[0].set_xlabel('Tempo (anos)')
+            ax[0].set_ylabel('População')
+            ax[0].grid(True)
+            ax[0].legend(loc='upper right', fontsize=7)
+
+            ax[1].set_title('Número de Reprodução Efetivo (Rt)')
+            ax[1].plot(t/365, rt, color='purple', label='Rt')
+            ax[1].axhline(1.0, color='gray', linestyle=':', label='Limiar epidêmico (Rt = 1)')
+            ax[1].set_xlabel('Tempo (anos)')
+            ax[1].set_ylabel('Rt')
+            ax[1].grid(True)
+            ax[1].legend(loc='upper right', fontsize=7)
+
+            plt.subplots_adjust(hspace=0.4)
+            plt.show()
+
+    window.close()
+
+
+if __name__ == '__main__':
+    main()

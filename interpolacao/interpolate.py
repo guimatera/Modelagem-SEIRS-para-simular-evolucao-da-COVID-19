@@ -23,8 +23,8 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 # Caminhos resolvidos a partir da pasta deste arquivo (e nao do diretorio de
 # execucao), para o script e a interface funcionarem de qualquer lugar
 RAIZ             = os.path.dirname(os.path.abspath(__file__))
-DIRETORIO_DADOS  = os.path.join(RAIZ, "dados")                       # pasta varrida pela interface
-ARQUIVO_CSV      = os.path.join(DIRETORIO_DADOS, "nascimentos_brasil.csv")  # usado ao rodar como script
+DIRETORIO_DADOS  = os.path.join(RAIZ, "..", "dados", "series_mensais")                 # pasta varrida pela interface
+ARQUIVO_CSV      = os.path.join(DIRETORIO_DADOS, "nascimentos_mensais_brasil.csv")  # usado ao rodar como script
 SEPARADOR_CSV    = ";"                                               # separador do CSV
 
 # Colunas lidas do cabecalho do CSV: 1a = periodo ("Marco/2015"), 2a = valor
@@ -339,7 +339,89 @@ def analisar_csv(arquivo,
     """
     col_periodo, col_valor = ler_colunas(arquivo, separador)
     x_mensal, y_mensal = carregar_dados_mensais(arquivo, separador, col_periodo, col_valor)
+    return analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
+                          anos_previsao, excluir_periodo)
 
+def analisar_diferenca(arquivo_a, arquivo_b,
+                       separador=SEPARADOR_CSV,
+                       excluir_periodo=EXCLUIR_PERIODO_PADRAO,
+                       nome=None):
+    """
+    Interpolação (sem extrapolação) da série DIFERENÇA (A - B), mês a mês, e a
+    integral da spline sobre o período com dados (res["integral"], ver
+    `integrar_spline`). Só entram os meses presentes nos dois CSVs.
+    """
+    per_a, col_a = ler_colunas(arquivo_a, separador)
+    per_b, col_b = ler_colunas(arquivo_b, separador)
+    x_a, y_a = carregar_dados_mensais(arquivo_a, separador, per_a, col_a)
+    x_b, y_b = carregar_dados_mensais(arquivo_b, separador, per_b, col_b)
+
+    # Casa os meses pelo índice inteiro (evita comparar floats)
+    idx_a = np.rint(x_a * 12 - 0.5).astype(int)
+    idx_b = np.rint(x_b * 12 - 0.5).astype(int)
+    comuns, ia, ib = np.intersect1d(idx_a, idx_b, return_indices=True)
+    if len(comuns) == 0:
+        raise ValueError(f"'{arquivo_a}' e '{arquivo_b}' nao tem nenhum mes em comum.")
+
+    col_valor = f"{col_a} - {col_b}"
+    res = analisar_serie(x_a[ia], y_a[ia] - y_b[ib],
+                         nome or f"{os.path.basename(arquivo_a)} - {os.path.basename(arquivo_b)}",
+                         "Ano/mes", col_valor, excluir_periodo=excluir_periodo,
+                         extrapolar=False)
+    res["integral"] = integrar_spline(res)
+    return res
+
+def integrar_spline(res):
+    """
+    Integral da spline de interpolação sobre o trecho com dados, pulando os
+    períodos excluídos (lá a spline não tem dado e só "dispara").
+
+    Os pontos são totais MENSAIS e x está em anos, então ∫y dx sai em
+    (unidades/mês)·ano; multiplicado por 12 vira a integral em t medido em
+    meses, ∫y dt, na mesma unidade da série (ex.: pessoas). É a versão contínua
+    da soma dos totais mensais, que vai junto para comparação.
+
+    Os limites são o MEIO do primeiro e do último mês com dado (onde estão os
+    nós da spline): a meia-borda de cada ponta fica de fora.
+    Devolve dict com a integral, a soma mensal e os trechos integrados.
+    """
+    spline, x, ano_base = res["spline"], res["x"], res["ano_base"]
+    trechos = [(float(x[0]), float(x[-1]))]
+    for ini, fim in res.get("excluir_periodo") or []:
+        ini, fim = ini - ano_base, fim - ano_base
+        novos = []
+        for a, b in trechos:
+            if fim <= a or ini >= b:
+                novos.append((a, b))
+                continue
+            if ini > a:
+                novos.append((a, ini))
+            if fim < b:
+                novos.append((fim, b))
+        trechos = novos
+
+    # Nas bordas de um período excluído, começa/termina no nó mais próximo
+    # dentro do trecho, para não integrar a parte sem dado
+    ajustados = []
+    for a, b in trechos:
+        nos = x[(x >= a - 1e-9) & (x <= b + 1e-9)]
+        if len(nos) >= 2:
+            ajustados.append((float(nos[0]), float(nos[-1])))
+
+    integral_anos = sum(float(spline.integrate(a, b)) for a, b in ajustados)
+    return {
+        "integral":        integral_anos * 12,     # ∫ y dt, t em meses
+        "integral_anos":   integral_anos,          # ∫ y dx, x em anos
+        "soma_mensal":     float(np.sum(res["y"])),
+        "trechos":         [(a + ano_base, b + ano_base) for a, b in ajustados],
+        "meses_cobertos":  sum((b - a) * 12 for a, b in ajustados),
+    }
+
+def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
+                   anos_previsao=QUANTIDADE_ANOS_PREVISAO,
+                   excluir_periodo=EXCLUIR_PERIODO_PADRAO,
+                   extrapolar=True):
+    """Núcleo de analisar_csv: recebe a série mensal (x em ano fracionário, y)."""
     # Descarta os períodos excluídos (ex.: choque da COVID-19, picos de surto). Os
     # pontos saem da spline e do ajuste, mas continuam guardados para o gráfico.
     periodos   = unir_periodos(excluir_periodo)
@@ -362,6 +444,35 @@ def analisar_csv(arquivo,
     # --- Interpolacao: spline cubica passando por todos os pontos mensais ----
     spline    = CubicSpline(x, y)
     r2_spline = r2_score(y, spline(x))
+
+    base = {
+        "arquivo":           arquivo,
+        "nome":              os.path.splitext(os.path.basename(arquivo))[0],
+        "col_periodo":       col_periodo,
+        "col_valor":         col_valor,
+        "x_mensal":          x_mensal,
+        "y_mensal":          y_mensal,
+        "x_excluido":        x_excluido,
+        "y_excluido":        y_excluido,
+        "excluir_periodo":   periodos,          # lista de (ini, fim), vazia se nenhum
+        "ano_base":          ano_base,
+        "x":                 x,
+        "y":                 y,
+        "spline":            spline,
+        "r2_spline":         r2_spline,
+    }
+
+    # Sem extrapolacao: so a interpolacao (modelo_tendencia = None sinaliza ao
+    # grafico, ao resumo e a interface que nao ha curva projetada)
+    if not extrapolar:
+        return {**base,
+                "rotulo_modelo":     None,
+                "descricao_modelo":  [],
+                "r2_tendencia":      None,
+                "modelo_tendencia":  None,
+                "anos_previsao":     0,
+                "x_futuros":         np.array([]),
+                "estimativa_futura": np.array([])}
 
     # --- Extrapolacao: Holt-Winters, em passos mensais (1/12 de ano) ---------
     x_futuros = np.arange(x[-1] + 1/12, x[-1] + 1/12 + anos_previsao, 1/12)
@@ -408,20 +519,7 @@ def analisar_csv(arquivo,
         )
 
     return {
-        "arquivo":           arquivo,
-        "nome":              os.path.splitext(os.path.basename(arquivo))[0],
-        "col_periodo":       col_periodo,
-        "col_valor":         col_valor,
-        "x_mensal":          x_mensal,
-        "y_mensal":          y_mensal,
-        "x_excluido":        x_excluido,
-        "y_excluido":        y_excluido,
-        "excluir_periodo":   periodos,          # lista de (ini, fim), vazia se nenhum
-        "ano_base":          ano_base,
-        "x":                 x,
-        "y":                 y,
-        "spline":            spline,
-        "r2_spline":         r2_spline,
+        **base,
         "rotulo_modelo":     rotulo,
         "descricao_modelo":  descricao,
         "r2_tendencia":      r2_tend,
@@ -452,6 +550,14 @@ def formata_numero(valor, casas=0):
     return (f"{valor:,.{casas}f}"
             .replace(",", "\x00").replace(".", ",").replace("\x00", "."))
 
+def descrever_integral(integ):
+    """'∫ y dt = 123.456 (Jan/2021 - Ago/2026, 67 meses)'."""
+    trechos = "; ".join(f"{frac_para_mes_ano(a, 0)} - {frac_para_mes_ano(b, 0)}"
+                        for a, b in integ["trechos"])
+    return (f"∫ y dt (t em meses) = {formata_numero(integ['integral'])}  "
+            f"({trechos}; {formata_numero(integ['meses_cobertos'])} meses entre "
+            f"o meio do 1º e do último mês)")
+
 def resumo_texto(res, incluir_previsao=True):
     """Monta o resumo textual da análise (mesmo conteúdo impresso pelo script)."""
     ano_base = res["ano_base"]
@@ -470,12 +576,22 @@ def resumo_texto(res, incluir_previsao=True):
     linhas += [
         "",
         f"[Interpolacao] CubicSpline (mensal)  |  R2 = {res['r2_spline']:.4f}",
-        "",
-        f"[Extrapolacao] {res['rotulo_modelo']}  |  R2 (fit) = {res['r2_tendencia']:.4f}",
     ]
-    linhas += [f"  {d}" for d in res["descricao_modelo"]]
+    if res.get("integral"):
+        integ = res["integral"]
+        linhas += [
+            "",
+            f"[Integral] {descrever_integral(integ)}",
+            f"  Soma dos totais mensais (comparacao): {formata_numero(integ['soma_mensal'])}",
+        ]
+    if res["modelo_tendencia"] is not None:
+        linhas += [
+            "",
+            f"[Extrapolacao] {res['rotulo_modelo']}  |  R2 (fit) = {res['r2_tendencia']:.4f}",
+        ]
+        linhas += [f"  {d}" for d in res["descricao_modelo"]]
 
-    if incluir_previsao:
+    if incluir_previsao and res["modelo_tendencia"] is not None:
         linhas += [
             "",
             f"[Previsao] Estimativa para os proximos {res['anos_previsao']} anos (mensal):",
@@ -528,8 +644,12 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     # Interpolacao e projecao desenhadas em resolucao diaria
     x_plot = np.arange(x[0], x[-1], 1/365)
     y_plot = res["spline"](x_plot)
-    x_fut  = np.arange(x[-1], res["x_futuros"][-1] + 1/365, 1/365)
-    y_fut  = res["modelo_tendencia"](x_fut)
+    extrapola = res["modelo_tendencia"] is not None
+    if extrapola:
+        x_fut = np.arange(x[-1], res["x_futuros"][-1] + 1/365, 1/365)
+        y_fut = res["modelo_tendencia"](x_fut)
+    else:
+        x_fut = y_fut = np.array([])
 
     # Dentro do período excluído a spline não tem dado nenhum para interpolar e
     # dispara (chega a superar o pico real). NaN interrompe a linha ali.
@@ -570,16 +690,33 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
                color="crimson", zorder=5, s=18, alpha=0.7, label="Dados Mensais")
     ax.plot(x_plot + ano_base, y_plot,
             color="royalblue", lw=1.5, label="Interpolacao CubicSpline (mensal)")
-    ax.scatter(res["x_futuros"] + ano_base, res["estimativa_futura"],
-               color="purple", zorder=5, marker="x", s=30, alpha=0.8,
-               label="Estimativa Mensal Futura")
-    ax.plot(x_fut + ano_base, y_fut,
-            color="purple", lw=2, linestyle="--", label="Extrapolacao Holt-Winters")
+    if extrapola:
+        ax.scatter(res["x_futuros"] + ano_base, res["estimativa_futura"],
+                   color="purple", zorder=5, marker="x", s=30, alpha=0.8,
+                   label="Estimativa Mensal Futura")
+        ax.plot(x_fut + ano_base, y_fut,
+                color="purple", lw=2, linestyle="--", label="Extrapolacao Holt-Winters")
+
+    # Área integrada (res["integral"]): acima de zero soma, abaixo subtrai
+    areas = []
+    if res.get("integral"):
+        for i, (a, b) in enumerate(res["integral"]["trechos"]):
+            xa = np.linspace(a - ano_base, b - ano_base, 4000)
+            ya = res["spline"](xa)
+            for cond, cor, rot in ((ya >= 0, "seagreen", "Área positiva"),
+                                   (ya <= 0, "indianred", "Área negativa")):
+                areas.append(ax.fill_between(xa + ano_base, ya, 0, where=cond,
+                                             interpolate=True, color=cor, alpha=0.18,
+                                             zorder=1, label=rot if i == 0 else None))
     ax.set_ylim(y_min, y_max)
+    # Séries de diferença (ex.: saídas - entradas) trocam de sinal: marca o zero
+    if y_min < 0 < y_max:
+        ax.axhline(0, color="black", lw=0.8, alpha=0.6, zorder=1)
 
     # O período excluído vai numa segunda linha: somado a um nome de série longo,
     # ele passava da largura da figura e o título saía cortado
-    titulo_padrao = f"Interpolação e Extrapolação - {res['col_valor']}"
+    titulo_padrao = (f"Interpolação e Extrapolação - {res['col_valor']}" if extrapola
+                     else f"Interpolação - {res['col_valor']}")
     if periodos:
         titulo_padrao += f"\n(sem o período excluído: {descrever_periodos(periodos)})"
     ax.set_title(titulo or titulo_padrao, fontsize=14, fontweight="bold")
@@ -589,7 +726,9 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
 
-    cursor = mplcursors.cursor(ax, hover=False)
+    # As áreas sombreadas ficam fora do tooltip (não são pontos mensais)
+    alvos  = [a for a in ax.collections + ax.lines if a not in areas]
+    cursor = mplcursors.cursor(alvos, hover=False)
     cursor.connect("add", formata_tooltip)
 
     return fig, ax, cursor
