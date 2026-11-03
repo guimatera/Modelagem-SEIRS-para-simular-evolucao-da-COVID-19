@@ -19,6 +19,7 @@ for _pasta in (_AQUI, os.path.dirname(_AQUI)):
 TEMA           = "SystemDefault"
 FONT_FAMILY   = "Segoe UI"
 FONT_SIZE      = 10
+FONTE_PADRAO   = (FONT_FAMILY, FONT_SIZE)
 TAMANHO_GRAFICO = (11, 5.2)  # polegadas (largura, altura) de cada figura
 DPI_GRAFICO     = 100        # pixels por polegada da figura
 
@@ -77,6 +78,16 @@ def linhas_diferenca():
     return linhas
 
 
+def linha_mortalidade():
+    """Checkbox da taxa diária de mortalidade; desabilitado se faltar algum CSV."""
+    faltando = [os.path.basename(a) for a in (itp.ARQUIVO_OBITOS, itp.ARQUIVO_POPULACAO)
+                if not os.path.isfile(a)]
+    texto = ("Taxa diária de mortalidade (óbitos ÷ população IBGE, ambos histopolados)"
+             + (f"   (falta {', '.join(faltando)})" if faltando else ""))
+    return [[sg.Checkbox(texto, default=False, key="-MORT-", disabled=bool(faltando),
+                         font=(FONT_FAMILY, FONT_SIZE))]]
+
+
 def montar_janela_principal(arquivos, separador):
     linhas = linhas_checkbox(arquivos, separador)
     # Sem altura fixa a coluna se ajusta ao conteudo e nenhum CSV fica cortado,
@@ -105,6 +116,9 @@ def montar_janela_principal(arquivos, separador):
         [sg.Button("Marcar todos"), sg.Button("Limpar seleção")],
         [sg.Frame("Séries derivadas (diferença mês a mês, só interpolação + integral)",
                   linhas_diferenca(),
+                  expand_x=True)],
+        [sg.Frame("Taxa de mortalidade (Pi do SEIHRVS, previsão pelo Holt-Winters dos óbitos)",
+                  linha_mortalidade(),
                   expand_x=True)],
         [sg.Frame("Opções", opcoes, expand_x=True)],
         [sg.Button("Gerar gráficos", bind_return_key=True),
@@ -147,15 +161,26 @@ def abrir_janela_grafico(res):
     if res.get("integral"):
         integ = res["integral"]
         layout += [
-            [sg.Text(f"Integral da spline: {itp.descrever_integral(integ)}",
+            [sg.Text(f"Integral da histospline: {itp.descrever_integral(integ)}",
                      font=(FONT_FAMILY, FONT_SIZE, "bold"))]
         ]
+    if res.get("tipo") == "mortalidade":
+        anual = res["mortalidade_anual"]
+        layout += [
+            [sg.Text(f"Pi médio por ano (por 100 mil hab./dia): " + "  ".join(
+                f"{ano}: {itp.formata_numero(pi * 1e5, 3)}" for ano, pi in anual["Pi_medio"].items()),
+                size=(130, None))],
+            [sg.Text(f"População IBGE histopolada - maior |média do ano - valor anual| "
+                     f"(deve ser ~0): {res['erro_populacao']:.2e}")],
+        ]
     layout += [
-        # Spline cubica INTERPOLA os pontos (passa por todos), entao R2=1 sempre:
-        # e so uma confirmacao de que a interpolacao esta correta, nao uma metrica
-        # de qualidade de ajuste.
-        [sg.Text(f"R² - Spline cúbica (interpolação, sempre 1): {res['r2_spline']:.4f}")],
-        [sg.Push(), sg.Button("Fechar", key=("-FECHAR-", arquivo))],
+        # A histospline conserva o total de cada mes por construcao: o erro so
+        # confirma isso (fica no nivel do arredondamento), nao mede ajuste.
+        [sg.Text(f"Histospline{' dos óbitos' if res.get('tipo') == 'mortalidade' else ''}"
+                 f" - maior erro do total mensal (deve ser ~0): "
+                 f"{res['erro_conservacao']:.2e}")],
+        [sg.Button("Gravar série diária (CSV)", key=("-SALVAR-", arquivo)),
+         sg.Push(), sg.Button("Fechar", key=("-FECHAR-", arquivo))],
     ]
     periodos = res.get("excluir_periodo")
     sufixo   = f" (sem {itp.descrever_periodos(periodos)})" if periodos else ""
@@ -179,8 +204,25 @@ def abrir_janela_grafico(res):
 
     # Guarda as referências: sem elas o tooltip (mplcursors) e o canvas morrem
     janelas_graficos[arquivo] = {"janela": janela, "fig": fig,
-                                 "canvas": canvas, "cursor": cursor}
+                                 "canvas": canvas, "cursor": cursor, "res": res}
     return janela
+
+
+def gravar_serie_diaria(arquivo):
+    """Grava a série diária (observado + previsão) da janela e avisa onde ficou."""
+    res = janelas_graficos[arquivo]["res"]
+    try:
+        caminho = os.path.abspath(itp.salvar_serie_diaria(res))
+    except Exception as erro:
+        traceback.print_exc()
+        sg.popup_error(f"Falha ao gravar a série diária:\n\n{erro}", font=FONTE_PADRAO)
+        return
+    diaria = res["diaria"]
+    previstos = int((~diaria["observado"]).sum())
+    sg.popup(f"Série diária gravada em:\n{caminho}\n\n"
+             f"{len(diaria)} dias ({len(diaria) - previstos} observados, "
+             f"{previstos} previstos)",
+             title="Série diária", font=FONTE_PADRAO)
 
 
 def fechar_janela_grafico(arquivo):
@@ -209,9 +251,10 @@ def gerar_graficos(janela, valores, arquivos):
 
     selecionados = csvs_marcados(valores, arquivos)
     diferencas   = [r for r in SERIES_DIFERENCA if valores.get(("-DIF-", r))]
-    if not selecionados and not diferencas:
+    mortalidade  = bool(valores.get("-MORT-"))
+    if not selecionados and not diferencas and not mortalidade:
         sg.popup("Marque ao menos um CSV ou série derivada para gerar gráficos.",
-                 title="Nenhum arquivo selecionado", font=FONT_FAMILY)
+                 title="Nenhum arquivo selecionado", font=FONTE_PADRAO)
         return
 
     for arquivo in selecionados:
@@ -221,7 +264,7 @@ def gerar_graficos(janela, valores, arquivos):
             abrir_janela_grafico(res)
         except Exception as erro:
             traceback.print_exc()
-            sg.popup_error(f"Falha ao processar '{arquivo}':\n\n{erro}", font=FONT_FAMILY)
+            sg.popup_error(f"Falha ao processar '{arquivo}':\n\n{erro}", font=FONTE_PADRAO)
 
     for rotulo in diferencas:
         arq_a, arq_b, nome = SERIES_DIFERENCA[rotulo]
@@ -233,11 +276,19 @@ def gerar_graficos(janela, valores, arquivos):
             abrir_janela_grafico(res)
         except Exception as erro:
             traceback.print_exc()
-            sg.popup_error(f"Falha ao processar '{rotulo}':\n\n{erro}", font=FONT_FAMILY)
+            sg.popup_error(f"Falha ao processar '{rotulo}':\n\n{erro}", font=FONTE_PADRAO)
+
+    if mortalidade:
+        try:
+            abrir_janela_grafico(itp.analisar_mortalidade(anos_previsao=anos, excluir_periodo=excluir))
+        except Exception as erro:
+            traceback.print_exc()
+            sg.popup_error(f"Falha ao calcular a taxa de mortalidade:\n\n{erro}", font=FONTE_PADRAO)
 
 
 def main():
     sg.theme(TEMA)
+    sg.set_options(font=FONTE_PADRAO)
     separador = itp.SEPARADOR_CSV
     arquivos  = itp.listar_csvs()
     janela    = montar_janela_principal(arquivos, separador)
@@ -253,7 +304,9 @@ def main():
 
         # Eventos das janelas de gráfico
         if win is not janela:
-            if evento == sg.WIN_CLOSED or (isinstance(evento, tuple) and evento[0] == "-FECHAR-"):
+            if isinstance(evento, tuple) and evento[0] == "-SALVAR-":
+                gravar_serie_diaria(evento[1])
+            elif evento == sg.WIN_CLOSED or (isinstance(evento, tuple) and evento[0] == "-FECHAR-"):
                 alvo = next((a for a, d in janelas_graficos.items() if d["janela"] is win), None)
                 if alvo:
                     fechar_janela_grafico(alvo)

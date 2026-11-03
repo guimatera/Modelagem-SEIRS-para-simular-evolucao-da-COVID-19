@@ -10,14 +10,14 @@ dias_I1_ate_R;;;;0;SINAN;não observável: o SINAN não registra a data de cura
 sigma_I1;0.23630593213697987;0.23182069795019453;0.24096814993536084;6031;SINAN;taxa I1 -> H (1/dia): 1 / dias médios até a internação
 gamma_I1;0.23630593213697987;0.23182069795019453;0.24096814993536084;6031;SINAN;"taxa I1 -> R (1/dia): igual a sigma_I1 (tempo até R não observado; ver dias_I1_ate_R)"
 obitos_sinan;48.0;;;41462;SINAN;óbitos pelo agravo entre os confirmados (validação, não entra no modelo)
-dias_H_ate_R;4.4815561959654175;4.343832977956611;4.619279413974224;3470;SIH;dias de enfermaria das internações sem UTI com alta (observado)
+dias_H_ate_R;4.473865594485928;4.336527279711329;4.611203909260527;3482;SIH;dias de enfermaria das internações sem UTI com alta (observado)
 dias_H_ate_C;1.4444444444444444;0.0;3.3800601203266147;9;SIH;dias de enfermaria antes da UTI, só nos óbitos em UTI (observado)
-p_C;0.03170189098998888;0.02645645304479472;0.03794678846722014;3596;SIH;fração das internações com dias de UTI
-sigma_H;0.22348121119006464;0.2168162189464808;0.23056896681508557;3491;SIH;taxa H -> C (1/dia): 1 / dias médios em H (sem UTI + antes da UTI nos óbitos)
-gamma_H;0.22348121119006464;0.2168162189464808;0.23056896681508557;3491;SIH;taxa H -> R (1/dia): igual a sigma_H (mesma taxa total de saída de H)
+p_C;0.03159645232815964;0.02636824493264056;0.037821022929937415;3608;SIH;fração das internações com dias de UTI
+sigma_H;0.2238624744376278;0.2171931206433471;0.23095439600845014;3503;SIH;taxa H -> C (1/dia): 1 / dias médios em H (sem UTI + antes da UTI nos óbitos)
+gamma_H;0.2238624744376278;0.2171931206433471;0.23095439600845014;3503;SIH;taxa H -> R (1/dia): igual a sigma_H (mesma taxa total de saída de H)
 dias_C_ate_D;6.888888888888889;2.1501194748763295;11.627658302901448;9;SIH;dias de UTI dos óbitos (observado)
 dias_C_ate_R;8.314285714285715;6.399844421620375;10.228727006951056;105;SIH;dias de UTI das altas (observado)
 d;0.07894736842105263;0.04208861436928513;0.143257520078162;114;SIH;fração de óbitos entre as internações com UTI
 sigma_C;0.12192513368983957;0.09998966526376399;0.15618959388228815;114;SIH;taxa C -> D (1/dia): 1 / dias médios de UTI (óbitos + altas)
 gamma_C;0.12192513368983957;0.09998966526376399;0.15618959388228815;114;SIH;taxa C -> R (1/dia): igual a sigma_C (mesma taxa total de saída de C)
-d_H;0.0034462952326249283;0.0019725585247409748;0.0060144538536794434;3482;SIH;fração de óbitos entre as internações sem UTI (se relevante, criar o fluxo H -> D)
+d_H;0.0034344590726960505;0.0019657802222254666;0.005993831214880789;3494;SIH;fração de óbitos entre as internações sem UTI (se relevante, criar o fluxo H -> D)

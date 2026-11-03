@@ -5,8 +5,11 @@ Ajuste do modelo SEIHRVS por mínimos quadrados com limites nas variáveis.
     Etapa A (lineares, equações normais x = (A^T A)^-1 A^T b, com limites):
         tau_IH                <- dias entre início dos sintomas e internação, no SINAN
         c_1, v_1,g, c_2,g     <- doses mensais por grupo, nascimentos e população por faixa
+    Condição inicial:
+        S/N por grupo         <- tabela de suscetíveis por faixa informada pelo usuário (sem fonte primária
+                                 citada); 0 ano sempre 100% suscetível. Coberturas como comparação.
     Etapa B (não linear, least_squares com limites):
-        R0, s0                <- casos diários do SINAN, simulando o sistema inteiro
+        R0                    <- casos diários do SINAN, simulando o sistema inteiro
     p_H, p_C e d também são estimados no SINAN e no SIH, só para comparar com a tabela.
 
 Hipóteses declaradas (os dados não permitem medi-las):
@@ -16,7 +19,15 @@ Hipóteses declaradas (os dados não permitem medi-las):
       Logo v = doses / população do grupo, e o fluxo do modelo continua v * S.
     - Coorte do grupo 1 só com mortalidade natural: lambda desprezível na sobrevivência aos 12 meses.
     - Tetraviral na D2 do grupo 1 só de 2023 em diante; antes disso não há dado.
-    - s0: mesma fração suscetível em 0-59 anos em T0; o restante começa em V.
+    - Frações suscetíveis da tabela informada pelo usuário: 1-4 anos 24,2%, 5-29 anos 38,6-39,6%,
+      30-59 anos 2,2-5,1%. A tabela não cita a fonte da soroprevalência. O restante começa em V.
+    - Menores de 1 ano: 100% suscetíveis (nunca vacinados). O grupo 1 do modelo (0-4 anos) usa a
+      média ponderada pela população de 0 ano e de 1-4 anos em T0.
+    - Comparação pela cobertura: a fração suscetível das coortes vacinadas em 2007-2015 (1 a 9 anos
+      em 2016) vale para todo 1-59 anos. Não há cobertura das coortes mais velhas.
+    - Cobertura acima de 100% (erro no denominador) é limitada a 100%.
+    - D2 sobre quem tomou D1 = cobertura D2 / cobertura D1; sem cobertura de D2 antes de 2013, D2 = 0.
+    - Os arquivos de cobertura não dizem a dose: D1 e D2 foram identificados pelos anos e valores.
     - Todos os maiores de 60 anos começam imunes, em R.
     - DT_SIN_PRI é tratado como a entrada em I; tau_IH só é medido nos internados.
     - Sem doses diárias: as taxas são por dia, mas ajustadas às doses mensais.
@@ -75,6 +86,10 @@ USA_LOG = {"R0": False, "s0": False}
 N_PARTIDAS = 12
 PASSO_DIF = 0.01
 SEMENTE = 2026
+# Suscetíveis por faixa da tabela informada pelo usuário: (mínimo, médio, máximo)
+S_PRINT = {"1-4": 0.242, "5-29": (0.386, 0.391, 0.396), "30-59": (0.022, 0.0365, 0.051)}
+ANOS_COORTES = range(2007, 2016)        # vacinados aos 12 meses antes de T0
+LIMITES_R0_ABERTO = (5.0, 30.0)         # sensibilidade: R0 sem os limites do texto
 NOMES_VACINA = ("c1", "v1_2", "v1_3", "c2_1", "c2_2")
 LIMITE_VACINA = {"c1": 1.0, "v1_2": np.inf, "v1_3": np.inf, "c2_1": 1.0, "c2_2": 1.0}
 MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
@@ -98,19 +113,12 @@ def ler_serie_mensal(caminho):
     return pd.Series(valores).sort_index()
 
 
-def populacao_por_ano():
-    pop = {}
-    for ano in range(2007, 2026):
-        tabela = pd.read_csv(os.path.join(DADOS, "populacao", f"populacao_por_uf_{ano}.csv"), sep=None, engine="python")
-        pop[ano] = float(tabela["POP"].sum())
-    pop[2026] = pop[2025]  # sem população de 2026: repete 2025
-    return pop
-
-
-def ler_projecao(faixa):
-    """Linha Total da projeção do IBGE (edição 2024), por ano."""
-    tabela = pd.read_csv(os.path.join(DADOS, "populacao", f"projecao_ibge_idade_{faixa}.csv"), sep=";",
-                         encoding="latin-1", skiprows=4, nrows=6)
+def ler_projecao(faixa, arquivo=None):
+    """Linha Total da projeção do IBGE (edição 2024), por ano; aceita o arquivo com ou sem o título do TabNet."""
+    arquivo = arquivo or os.path.join(DADOS, "populacao", f"projecao_ibge_idade_{faixa}.csv")
+    linhas = open(arquivo, encoding="latin-1").read().splitlines()
+    inicio = next(i for i, linha in enumerate(linhas) if linha.startswith('"Regi'))
+    tabela = pd.read_csv(io.StringIO("\n".join(linhas[inicio:inicio + 7])), sep=";")
     total = tabela[tabela.iloc[:, 0] == "Total"].iloc[0, 1:]
     return {int(ano): float(valor) for ano, valor in total.items()}
 
@@ -122,6 +130,11 @@ def populacao_por_faixa():
             3: ler_projecao("30_a_59_anos"), 60: ler_projecao("60_anos_ou_mais")}
 
 
+def populacao_por_ano(pop_faixas):
+    """População total por ano: soma das faixas da projeção."""
+    return {ano: sum(pop_faixas[g][ano] for g in pop_faixas) for ano in pop_faixas[1]}
+
+
 def carregar_dados():
     series = {
         "nascimentos": ler_serie_mensal(os.path.join(DADOS, "series_mensais", "nascimentos_mensais_brasil.csv")),
@@ -130,7 +143,8 @@ def carregar_dados():
     sinan = hosp.carregar_sinan(ANOS_HOSP)
     sih = hosp.carregar_sih(ANOS_HOSP, hosp.TODAS_UFS)
     eventos = pd.read_csv(ARQUIVO_EVENTOS, sep=";")
-    return series, sinan, sih, populacao_por_ano(), eventos, ler_doses_grupos(), populacao_por_faixa()
+    pop_faixas = populacao_por_faixa()
+    return series, sinan, sih, populacao_por_ano(pop_faixas), eventos, ler_doses_grupos(), pop_faixas
 
 
 # =============================================================================
@@ -263,6 +277,33 @@ def sistemas_vacinais(series, doses, pop_faixas, pi_taxa, ini=T0, fim=FIM):
             "c2_2": sistema(observado(1, 2, 1), observado(2, 2))}
 
 
+def ler_cobertura():
+    """Cobertura (fração) do Brasil por ano e dose: TabNet/PNI até 2022 e planilhas de 2023 em diante."""
+    pasta = os.path.join(DADOS, "vacinacao")
+
+    def tabnet(nome):
+        tabela = pd.read_csv(os.path.join(pasta, nome), sep=";", encoding="latin-1", dtype=str)
+        total = tabela[tabela.iloc[:, 0].str.strip() == "Total"].iloc[0, 1:]
+        return {int(a): float(v.replace(",", ".")) / 100 for a, v in total.items() if a.strip().isdigit()}
+
+    def planilha(nome):
+        tabela = pd.read_excel(os.path.join(pasta, nome))
+        return dict(zip(tabela["Ano"].astype(int), tabela["Cobertura"].astype(float)))
+
+    return {1: {**tabnet("cobertura_d1_por_regiao_2007_2022.csv"), **planilha("cobertura_d1_brasil_2023_2026.xlsx")},
+            2: {**tabnet("cobertura_d2_por_regiao_2013_2022.csv"), **planilha("cobertura_d2_brasil_2023_2026.xlsx")}}
+
+
+def s0_por_cobertura(cobertura, anos=ANOS_COORTES, com_d2=True):
+    """Média da fração suscetível das coortes: D1 imuniza e_1; nas falhas, a D2 imuniza e_2."""
+    s = []
+    for ano in anos:
+        c1 = min(cobertura[1][ano], 1.0)
+        c2 = min(cobertura[2].get(ano, 0.0) / cobertura[1][ano], 1.0) if com_d2 else 0.0
+        s.append((1.0 - c1) + c1 * (1.0 - FIXOS["e1"]) * (1.0 - FIXOS["e2"] * c2))
+    return float(np.mean(s))
+
+
 def etapa_vacinal(series, doses, pop_faixas, pi_taxa, ini=T0, fim=FIM):
     return {nome: ajuste_linear(x, y, [0.0], [LIMITE_VACINA[nome]])
             for nome, (x, y, _) in sistemas_vacinais(series, doses, pop_faixas, pi_taxa, ini, fim).items()}
@@ -315,15 +356,20 @@ class Problema:
     def condicao_inicial(self):
         return condicao_inicial(self.faixas, 0.0, 0.0, 0.0, 0.0)
 
+    def fracao_suscetivel(self, s0):
+        """S/N em T0; os maiores de 60 anos começam em R."""
+        return float(np.dot(np.broadcast_to(np.asarray(s0, float), 3), self.faixas[:3]) / self.N)
+
     def simular(self, teta):
         params = dict(self.base)
         params["R0"] = float(teta["R0"])
-        s0 = float(teta["s0"])
+        # s0: uma fração para todos os grupos ou uma por grupo (0-4, 5-29, 30-59)
+        s0 = np.broadcast_to(np.asarray(teta["s0"], float), 3)
 
         x0 = self.condicao_inicial()
-        for s, v in zip(IDX_S, IDX_V):
-            x0[v] = (1.0 - s0) * x0[s]
-            x0[s] = s0 * x0[s]
+        for s, v, frac in zip(IDX_S, IDX_V, s0):
+            x0[v] = (1.0 - frac) * x0[s]
+            x0[s] = frac * x0[s]
 
         fluxos = {}
         x, _, _, icu = simular(x0, 0.0, float(self.dias.size), 1.0, params, self.importados, fluxos)
@@ -335,6 +381,7 @@ class Ajuste:
 
     def __init__(self, problema, nomes, fixos=None, y_sinteticos=None):
         self.p, self.nomes, self.fixos = problema, nomes, dict(fixos or {})
+        self.max_nfev = 40
         self.y_c = problema.y_c if y_sinteticos is None else y_sinteticos
         self.limites = [self._transforma(n, np.array(LIMITES[n])) for n in nomes]
 
@@ -361,7 +408,7 @@ class Ajuste:
         solucoes = []
         for z0 in partidas:
             sol = least_squares(self.residuos, np.clip(z0, 1e-3, 1 - 1e-3), bounds=(0.0, 1.0), method="trf",
-                                diff_step=PASSO_DIF, x_scale=1.0, max_nfev=40)
+                                diff_step=PASSO_DIF, x_scale=1.0, max_nfev=self.max_nfev)
             solucoes.append(sol)
         solucoes.sort(key=lambda s: s.cost)
         return solucoes
@@ -412,7 +459,7 @@ def resumo(problema, teta, y=None):
             "casos_modelo": float(sim["c"][:n].sum()), "casos_obs": float(y[:n].sum()),
             "dia_pico_modelo": int(sim["c"][:n].argmax()), "dia_pico_obs": int(y[:n].argmax()),
             "pico_modelo": float(sim["c"][:n].max()), "pico_obs": float(y[:n].max()),
-            "R0_s0": float(teta["R0"] * teta["s0"])}
+            "Rt_inicial": teta["R0"] * problema.fracao_suscetivel(teta["s0"])}
 
 
 # =============================================================================
@@ -455,70 +502,75 @@ def main():
     linhas_cen = []
 
     def registrar(cenario, teta, extra=None):
-        linha = {"cenario": cenario, **{k: teta.get(k) for k in ("R0", "s0")}}
+        linha = {"cenario": cenario, "R0": teta["R0"], "s0": tuple(np.round(np.broadcast_to(teta["s0"], 3), 4))}
         linha.update(resumo(problema, teta))
         linha.update(extra or {})
         linhas_cen.append(linha)
-        print(f"  {cenario}: R0={teta['R0']:.2f} s0={teta['s0']:.4f} "
-              f"R0*s0={teta['R0'] * teta['s0']:.3f} R2={linha['r2']:.3f} RMSE={linha['rmse']:.1f} SSE={linha['sse_log']:.1f} "
+        print(f"  {cenario}: R0={teta['R0']:.2f} Rt inicial={linha['Rt_inicial']:.3f} R2={linha['r2']:.3f} RMSE={linha['rmse']:.1f} SSE={linha['sse_log']:.1f} "
               f"casos={linha['casos_modelo']:.0f}/{linha['casos_obs']:.0f} "
               f"pico dia={linha['dia_pico_modelo']}/{linha['dia_pico_obs']}")
 
-    nomes = ["R0", "s0"]
+    print("\nCondição inicial: fração suscetível por faixa (0 ano sempre 100%)")
+    n_0, n_1_4 = ler_projecao("0_anos")[T0.year], ler_projecao("1_a_4_anos")[T0.year]
+
+    def grupo_1(s_1_4):
+        return (n_0 + n_1_4 * s_1_4) / (n_0 + n_1_4)
+
+    cenarios_s = {f"print, {nome}": (grupo_1(S_PRINT["1-4"]), S_PRINT["5-29"][k], S_PRINT["30-59"][k])
+                  for k, nome in enumerate(("mínimo", "médio", "máximo"))}
+    cobertura = ler_cobertura()
+    for rotulo, com_d2 in (("cobertura D1+D2", True), ("cobertura só D1", False)):
+        s = s0_por_cobertura(cobertura, com_d2=com_d2)
+        cenarios_s[rotulo] = (grupo_1(s), s, s)
+    for rotulo, s in cenarios_s.items():
+        print(f"  {rotulo}: S/N por grupo={np.round(s, 4)} S/N total={problema.fracao_suscetivel(s):.4f}")
+    s0 = cenarios_s["print, médio"]
+    nomes, fixos = ["R0"], {"s0": s0}
 
     print("\nTeste sintético (dados Poisson gerados pelo modelo, parâmetros conhecidos)")
-    verdade = {"R0": 15.0, "s0": 0.08}
+    verdade = {"R0": 15.0, "s0": s0}
     rng = np.random.default_rng(SEMENTE)
     y_sint = rng.poisson(problema.simular(verdade)["c"]).astype(float)
-    aj_sint = Ajuste(problema, nomes, y_sinteticos=y_sint)
-    sint = aj_sint.otimizar(aj_sint.partidas(N_PARTIDAS))[0]
-    t_sint = aj_sint.teta(sint.x)
-    print(f"  verdade: {verdade}, R0*s0={verdade['R0'] * verdade['s0']:.3f}")
-    print(f"  obtido: R0={t_sint['R0']:.3f} s0={t_sint['s0']:.4f} "
-          f"R0*s0={t_sint['R0'] * t_sint['s0']:.3f}")
-    dg_sint = diagnosticos(aj_sint, sint.x)
-    print(f"  valores singulares: {np.round(dg_sint['sv'], 3)}")
+    aj_sint = Ajuste(problema, nomes, fixos=fixos, y_sinteticos=y_sint)
+    t_sint = aj_sint.teta(aj_sint.otimizar(aj_sint.partidas(N_PARTIDAS))[0].x)
+    print(f"  verdade: R0={verdade['R0']}; obtido: R0={t_sint['R0']:.3f}")
 
-    print("\nEtapa B: casos diários")
-    aj_b = Ajuste(problema, nomes)
+    print("\nEtapa B: casos diários, S do print (valores médios)")
+    aj_b = Ajuste(problema, nomes, fixos=fixos)
     sols = aj_b.otimizar(aj_b.partidas(N_PARTIDAS))
     print("  custos das partidas:", np.round([2 * s.cost for s in sols], 1))
-    print("  soluções distintas:")
-    for s in sols[:5]:
-        t = aj_b.teta(s.x)
-        print(f"    SSE={2 * s.cost:.1f} R0={t['R0']:.2f} s0={t['s0']:.4f} status={s.status}")
     teta_b = aj_b.teta(sols[0].x)
-    registrar("B: casos", teta_b)
+    registrar("B: print, médio", teta_b, {"status": sols[0].status})
     dg_b = diagnosticos(aj_b, sols[0].x)
-    print(f"  valores singulares={np.round(dg_b['sv'], 3)}")
-    print(f"  direções (ln R0, ln s0):\n{np.round(dg_b['Vt'], 3)}")
-    print(f"  autocorr. lag 1 dos resíduos={dg_b['autocorr_1']:.3f} sigma2={dg_b['sigma2']:.3f}")
+    print(f"  valor singular={np.round(dg_b['sv'], 3)} autocorr. lag 1 dos resíduos={dg_b['autocorr_1']:.3f} "
+          f"sigma2={dg_b['sigma2']:.3f}")
 
-    print("\nPerfil de R0")
+    print("\nPerfil de R0, com S do print (valores médios)")
     for r0 in (12.0, 15.0, 18.0):
-        aj = Ajuste(problema, ["s0"], fixos={"R0": r0})
-        registrar(f"perfil R0={r0:.0f}", aj.teta(aj.otimizar(aj.partidas(8))[0].x))
+        registrar(f"perfil R0={r0:.0f}", {"R0": r0, "s0": s0})
 
     sim_b = problema.simular(teta_b)
 
-    print("\nSensibilidade: p_H, p_C e d estimados na Etapa A, no lugar dos valores da tabela")
-    prob_est = Problema(series, sinan, pop, eventos, vacina, pop_faixas, tau_IH)
-    prob_est.base.update({nome: float(clinica[nome]["x"][0]) for nome in ("pH", "pC", "d")})
-    aj_est = Ajuste(prob_est, nomes)
-    teta_est = aj_est.teta(aj_est.otimizar(aj_est.partidas(N_PARTIDAS))[0].x)
-    linha_est = {"cenario": "frações estimadas", **teta_est, **resumo(prob_est, teta_est)}
-    linhas_cen.append(linha_est)
-    print(f"  R0={teta_est['R0']:.2f} s0={teta_est['s0']:.4f} R2={linha_est['r2']:.3f} RMSE={linha_est['rmse']:.1f}")
+    print("\nSensibilidade")
+    for rotulo, s in cenarios_s.items():
+        if rotulo == "print, médio":
+            continue
+        aj = Ajuste(problema, nomes, fixos={"s0": s})
+        registrar(rotulo, aj.teta(aj.otimizar(aj.partidas(N_PARTIDAS))[0].x))
+    for rotulo in ("print, médio", "cobertura D1+D2"):
+        aj = Ajuste(problema, nomes, fixos={"s0": cenarios_s[rotulo]})
+        aj.limites = [np.array(LIMITES_R0_ABERTO)]
+        registrar(f"{rotulo}, R0 em {LIMITES_R0_ABERTO}", aj.teta(aj.otimizar(aj.partidas(N_PARTIDAS))[0].x))
 
     print(f"\nValidação: ajuste até {FIM_TREINO.date()}, previsão até {FIM.date()}")
     prob_t = Problema(series, sinan, pop, eventos, vacina, pop_faixas, tau_IH, fim=FIM_TREINO)
-    aj_t = Ajuste(prob_t, nomes)
+    aj_t = Ajuste(prob_t, nomes, fixos=fixos)
     teta_t = aj_t.teta(aj_t.otimizar(aj_t.partidas(N_PARTIDAS))[0].x)
     sim_t = prob_t.simular(teta_t)
     n_t = prob_t.n_dias
     sse_fora = float(((np.log1p(problema.y_c[n_t:problema.n_dias]) - np.log1p(sim_t["c"][n_t:problema.n_dias])) ** 2).sum())
     sse_fora_b = float(((np.log1p(problema.y_c[n_t:problema.n_dias]) - np.log1p(sim_b["c"][n_t:problema.n_dias])) ** 2).sum())
-    print(f"  R0={teta_t['R0']:.2f} s0={teta_t['s0']:.4f}")
+    print(f"  R0={teta_t['R0']:.2f}")
     print(f"  casos fora do treino: modelo={sim_t['c'][n_t:problema.n_dias].sum():.0f} "
           f"obs={problema.y_c[n_t:problema.n_dias].sum():.0f}")
     print(f"  SSE fora do treino={sse_fora:.1f} (ajuste completo no mesmo trecho={sse_fora_b:.1f})")
@@ -548,6 +600,8 @@ def main():
                        "n": a["n"], "no_limite": a["limite"][0], "r2": a["r2"], "rmse": a["rmse"]})
     linhas += [{"parametro": "Lambda", "valor": problema.base["Lambda"], "etapa": "dados"},
                {"parametro": "Pi", "valor": problema.base["Pi"], "etapa": "dados"}]
+    for g, frac in zip(("0-4", "5-29", "30-59"), s0):
+        linhas.append({"parametro": f"S/N {g}", "valor": frac, "etapa": "tabela informada"})
     for j, n in enumerate(nomes):
         a, b = LIMITES[n]
         linhas.append({"parametro": n, "valor": teta_b[n], "erro_padrao": teta_b[n] * dg_b["ep_log"][j], "etapa": "B",
