@@ -1,5 +1,6 @@
 import os
 import glob
+import fnmatch
 import calendar
 import datetime
 import textwrap
@@ -7,6 +8,8 @@ import warnings
 import unicodedata
 
 import numpy as np
+import matplotlib
+import matplotlib.ticker
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
@@ -32,6 +35,7 @@ DIRETORIO_SAIDA_DIARIA = os.path.join(RAIZ, "..", "dados", "resultados", "interp
 
 # Taxa diaria de mortalidade (Pi do SEIHRVS) = obitos / populacao, ambos diarios
 ARQUIVO_OBITOS     = os.path.join(DIRETORIO_DADOS, "obitos_mensais_brasil.csv")
+ARQUIVO_NASCIMENTOS = os.path.join(DIRETORIO_DADOS, "nascimentos_mensais_brasil.csv")  # projecao da populacao
 ARQUIVO_POPULACAO  = os.path.join(RAIZ, "..", "dados", "populacao",
                                   "projecao_ibge_populacao_regioes_2000_2070.csv")
 LINHA_POPULACAO    = "Total"   # linha do Brasil no CSV do IBGE
@@ -75,14 +79,12 @@ AMORTECER_TENDENCIA_HW = False
 PERIODO_COVID           = (2020.0, 2023.0)
 EXCLUIR_PERIODO_PADRAO  = None  # ou PERIODO_COVID, para o script já rodar sem COVID
 
-# Picos de surto nas séries de vacina, que não se repetem de um ano para o outro:
-# set/2016 (~2,5x um mês típico na 2ª dose) e o surto de sarampo de 2018-2019,
-# com campanhas e vacinação de bloqueio (ago/2019 chega a ~5x). Eles inclinam a
-# tendência do Holt-Winters para baixo a ponto de a projeção ficar negativa. Não
-# há opção na interface; para descartá-los ao rodar o script com um CSV de vacina,
-# use EXCLUIR_PERIODO_PADRAO = PERIODOS_SURTO_VACINA + [PERIODO_COVID].
-PERIODOS_SURTO_VACINA   = [(2016 + 8/12, 2016 + 9/12),   # set/2016
-                           (2018.0, 2020.0)]             # surto de sarampo
+# CSVs da pasta de dados que NÃO aparecem como série própria na interface
+# (padrão glob sobre o nome do arquivo):
+#   - doses de vacina (1ª e 2ª dose): fora desta análise;
+#   - emigração e imigração: entram só pelo saldo migratório (SERIES_DIFERENCA
+#     em interpolate_gui.py), que continua lendo os dois arquivos.
+CSVS_IGNORADOS = ("doses_*.csv", "emigracao_*.csv", "imigracao_*.csv")
 
 
 # =============================================================================
@@ -90,8 +92,17 @@ PERIODOS_SURTO_VACINA   = [(2016 + 8/12, 2016 + 9/12),   # set/2016
 # =============================================================================
 
 def listar_csvs(diretorio=DIRETORIO_DADOS):
-    """Retorna a lista ordenada dos CSVs disponíveis no diretório de dados."""
-    return sorted(glob.glob(os.path.join(diretorio, "*.csv")))
+    """Lista ordenada dos CSVs do diretório de dados, sem os de `CSVS_IGNORADOS`."""
+    return sorted(arq for arq in glob.glob(os.path.join(diretorio, "*.csv"))
+                  if not any(fnmatch.fnmatch(os.path.basename(arq), p) for p in CSVS_IGNORADOS))
+
+def eh_arquivo_nascimentos(arquivo):
+    """True se `arquivo` é o CSV de nascimentos (exporta os nascimentos por dia)."""
+    return os.path.normcase(os.path.abspath(arquivo)) == os.path.normcase(os.path.abspath(ARQUIVO_NASCIMENTOS))
+
+def eh_arquivo_obitos(arquivo):
+    """True se `arquivo` é o CSV de óbitos (vira a taxa diária de mortalidade)."""
+    return os.path.normcase(os.path.abspath(arquivo)) == os.path.normcase(os.path.abspath(ARQUIVO_OBITOS))
 
 def unir_periodos(periodos):
     """
@@ -316,10 +327,16 @@ def _completar_serie_mensal(x, y, periodo, multiplicativa):
     COVID-19: 36 meses fora, com 60 antes e ~39 depois). Descartar o trecho
     anterior jogaria fora metade da história e emendar os dois deslocaria os
     meses, então os ausentes são RECONSTRUÍDOS (e marcados em `observado`, para
-    ficarem fora do R²): nível por interpolação linear entre as bordas, vezes o
-    fator típico daquele mês medido nos dados reais. Sem esse segundo passo o
-    buraco entraria como 3 ciclos "chapados" e o modelo leria a sazonalidade
-    como menor do que ela é.
+    ficarem fora do R² e do RMSE): reta de mínimos quadrados sobre TODOS os
+    meses observados, vezes (ou mais) o fator sazonal mediano daquele mês em
+    relação à reta.
+
+    Escolha medida nos dados (lacunas artificiais fora da COVID, valor real
+    conhecido; 11 lacunas de 12, 24 e 36 meses por série): erro médio (MAPE)
+    de 3,5% nos nascimentos e 1,9% nos óbitos, contra 3,7% e 3,9% do método
+    anterior (nível interpolado entre as bordas x sazonal). Só 1 dessas
+    lacunas tem os 36 meses da COVID. Hipótese: a tendência do período é
+    aproximadamente linear - os dados não mostram se vale dentro da lacuna.
     """
     idx   = np.rint(np.asarray(x, dtype=float) * 12 - 0.5).astype(int)  # mes 0 = jan do ano-base
     ordem = np.argsort(idx)
@@ -331,15 +348,15 @@ def _completar_serie_mensal(x, y, periodo, multiplicativa):
 
     faltantes = ~observado
     if faltantes.any():
-        nivel  = (pd.Series(serie).rolling(periodo, center=True, min_periods=1)
-                  .mean().to_numpy())
-        desvio = serie / nivel if multiplicativa else serie - nivel
+        # Reta ajustada so nos meses reais, avaliada na grade inteira
+        reta   = np.polyval(np.polyfit(grade[observado], serie[observado], 1), grade)
+        desvio = serie / reta if multiplicativa else serie - reta
         meses  = grade % periodo
         tipico = (pd.Series(desvio[observado]).groupby(meses[observado]).median()
                   .reindex(range(periodo)).fillna(1.0 if multiplicativa else 0.0)
                   .to_numpy())[meses[faltantes]]
-        serie[faltantes] = (nivel[faltantes] * tipico if multiplicativa
-                            else nivel[faltantes] + tipico)
+        serie[faltantes] = (reta[faltantes] * tipico if multiplicativa
+                            else reta[faltantes] + tipico)
 
     return grade, serie, observado
 
@@ -470,67 +487,111 @@ def ajustar_holt_winters(x, y, passos_futuros,
 def analisar_csv(arquivo,
                  separador=SEPARADOR_CSV,
                  anos_previsao=QUANTIDADE_ANOS_PREVISAO,
-                 excluir_periodo=EXCLUIR_PERIODO_PADRAO):
+                 excluir_periodo=EXCLUIR_PERIODO_PADRAO,
+                 extrapolar=True):
     """
-    Interpolação (histospline) + extrapolação (Holt-Winters) de um CSV.
+    Interpolação por histopolação (histospline: conserva o total de cada mês e
+    estima a taxa diária) e, se `extrapolar`, extrapolação por Holt-Winters.
     Retorna um dicionário com os dados, os modelos e as métricas do arquivo.
     excluir_periodo: None, um (ini, fim) ou uma lista deles.
     """
     col_periodo, col_valor = ler_colunas(arquivo, separador)
     x_mensal, y_mensal = carregar_dados_mensais(arquivo, separador, col_periodo, col_valor)
     return analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
-                          anos_previsao, excluir_periodo)
+                          anos_previsao, excluir_periodo, extrapolar=extrapolar)
 
 def analisar_diferenca(arquivo_a, arquivo_b,
                        separador=SEPARADOR_CSV,
                        excluir_periodo=EXCLUIR_PERIODO_PADRAO,
                        nome=None):
     """
-    Interpolação (sem extrapolação) da série DIFERENÇA (A - B), mês a mês, e a
-    integral da spline sobre o período com dados (res["integral"], ver
-    `integrar_spline`). Só entram os meses presentes nos dois CSVs.
+    Saldo A - B (ex.: emigração - imigração) a partir das séries HISTOPOLADAS.
+
+    Cada CSV é histopolado separadamente (histospline, sem extrapolação): sai a
+    taxa diária de A e a de B, cada uma conservando os totais mensais do seu
+    CSV. O saldo diário é a diferença das duas, só nos dias cobertos por ambas,
+    e res["integral"] é a integral desse saldo (∫ (a - b) dt, t em dias).
+
+    Como cada valor diário é A(d+1) - A(d) do acumulado, a soma dos dias é a
+    integral exata da curva; e como as duas histosplines conservam o total de
+    cada mês, essa integral é igual à soma dos saldos mensais (vai junto como
+    conferência). A histopolação muda a forma diária dentro do mês, não o total.
     """
-    per_a, col_a = ler_colunas(arquivo_a, separador)
-    per_b, col_b = ler_colunas(arquivo_b, separador)
-    x_a, y_a = carregar_dados_mensais(arquivo_a, separador, per_a, col_a)
-    x_b, y_b = carregar_dados_mensais(arquivo_b, separador, per_b, col_b)
+    res_a = analisar_csv(arquivo_a, separador=separador,
+                         excluir_periodo=excluir_periodo, extrapolar=False)
+    res_b = analisar_csv(arquivo_b, separador=separador,
+                         excluir_periodo=excluir_periodo, extrapolar=False)
 
-    # Casa os meses pelo índice inteiro (evita comparar floats)
-    idx_a = np.rint(x_a * 12 - 0.5).astype(int)
-    idx_b = np.rint(x_b * 12 - 0.5).astype(int)
-    comuns, ia, ib = np.intersect1d(idx_a, idx_b, return_indices=True)
-    if len(comuns) == 0:
-        raise ValueError(f"'{arquivo_a}' e '{arquivo_b}' nao tem nenhum mes em comum.")
+    diaria = res_a["diaria"][["dia", "valor"]].merge(
+        res_b["diaria"][["dia", "valor"]], on="dia", suffixes=("_a", "_b"))
+    if diaria.empty:
+        raise ValueError(f"'{arquivo_a}' e '{arquivo_b}' nao tem nenhum dia em comum.")
+    diaria = pd.DataFrame({
+        "dia":       diaria["dia"],
+        "valor":     diaria["valor_a"] - diaria["valor_b"],   # saldo por dia
+        res_a["nome"]: diaria["valor_a"],
+        res_b["nome"]: diaria["valor_b"],
+        "observado": True,
+    }).sort_values("dia", ignore_index=True)
 
-    col_valor = f"{col_a} - {col_b}"
-    res = analisar_serie(x_a[ia], y_a[ia] - y_b[ib],
-                         nome or f"{os.path.basename(arquivo_a)} - {os.path.basename(arquivo_b)}",
-                         "Ano/mes", col_valor, excluir_periodo=excluir_periodo,
-                         extrapolar=False)
-    res["integral"] = integrar_spline(res)
-    return res
+    # Saldo mensal (totais A - B), casando os meses pelo indice inteiro
+    def _saldo_mensal(xa, ya, xb, yb):
+        ia_m = np.rint(np.asarray(xa) * 12 - 0.5).astype(int)
+        ib_m = np.rint(np.asarray(xb) * 12 - 0.5).astype(int)
+        _, ia, ib = np.intersect1d(ia_m, ib_m, return_indices=True)
+        return np.asarray(xa)[ia], np.asarray(ya)[ia] - np.asarray(yb)[ib]
 
-def integrar_spline(res):
-    """
-    Integral da curva de interpolação sobre os trechos com dado, pulando os
-    períodos excluídos (lá não há total para conservar).
+    x_mensal, y_mensal = _saldo_mensal(res_a["x_mensal"], res_a["y_mensal"],
+                                       res_b["x_mensal"], res_b["y_mensal"])
+    x_exc, y_exc = (_saldo_mensal(res_a["x_excluido"], res_a["y_excluido"],
+                                  res_b["x_excluido"], res_b["y_excluido"])
+                    if len(res_a["x_excluido"]) and len(res_b["x_excluido"])
+                    else (np.array([]), np.array([])))
 
-    A curva é uma taxa diária, então ∫y dt (t em dias) sai na mesma unidade da
-    série (ex.: pessoas). Os limites são as bordas reais do primeiro
-    e do último mês de cada trecho, então, pela histospline, a integral é igual
-    à soma dos totais mensais (vai junto para comparação).
-    Devolve dict com a integral, a soma mensal e os trechos integrados.
-    """
-    spline, ano_base = res["spline"], res["ano_base"]
-    # so o trecho observado: meses projetados nao entram na integral
-    trechos = [(a, min(b, spline.fim_observado)) for a, b, _ in spline.trechos
-               if a < spline.fim_observado]
+    # Trechos de dias consecutivos (o periodo excluido abre um buraco)
+    ordinais = np.array([d.toordinal() for d in diaria["dia"]])
+    cortes   = np.flatnonzero(np.diff(ordinais) != 1) + 1
+    trechos  = [(float(_dia_para_ano(seg[0])), float(_dia_para_ano(seg[-1] + 1)))
+                for seg in np.split(ordinais, cortes)]
 
+    nome_a = res_a["col_valor"]
+    nome_b = res_b["col_valor"]
+    ordem  = np.argsort(x_mensal)
+    ano_base = int(np.floor(x_mensal.min()))
     return {
-        "integral":        sum(spline.integrate(a, b) for a, b in trechos),  # ∫ y dt, t em dias
-        "soma_mensal":     float(np.sum(res["y"])),
-        "trechos":         [(a + ano_base, b + ano_base) for a, b in trechos],
-        "meses_cobertos":  sum(1 for a, _, _ in spline.meses if a < spline.fim_observado),
+        "tipo":              "saldo",
+        "arquivo":           nome or f"{os.path.basename(arquivo_a)} - {os.path.basename(arquivo_b)}",
+        "nome":              nome or f"{res_a['nome']}-{res_b['nome']}",
+        "col_periodo":       "Ano/mes",
+        "col_valor":         f"{nome_a} - {nome_b}",
+        "nome_a":            nome_a,           # rotulo (coluna de valor do CSV)
+        "nome_b":            nome_b,
+        "coluna_a":          res_a["nome"],    # coluna da serie diaria
+        "coluna_b":          res_b["nome"],
+        "res_a":             res_a,
+        "res_b":             res_b,
+        "x_mensal":          x_mensal[ordem],
+        "y_mensal":          y_mensal[ordem],
+        "x_excluido":        x_exc,
+        "y_excluido":        y_exc,
+        "excluir_periodo":   res_a["excluir_periodo"],
+        "ano_base":          ano_base,
+        "x":                 x_mensal[ordem] - ano_base,
+        "y":                 y_mensal[ordem],
+        "diaria":            diaria,
+        "erro_conservacao":  max(res_a["erro_conservacao"], res_b["erro_conservacao"]),
+        "rotulo_modelo":     None,
+        "descricao_modelo":  [],
+        "r2_tendencia":      None,
+        "modelo_tendencia":  None,
+        "anos_previsao":     0,
+        "x_futuros":         np.array([]),
+        "estimativa_futura": np.array([]),
+        "integral": {
+            "integral":       float(diaria["valor"].sum()),   # ∫ saldo dt, t em dias
+            "trechos":        trechos,
+            "meses_cobertos": int(len(x_mensal)),
+        },
     }
 
 def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
@@ -559,6 +620,16 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
     # --- Interpolacao: histospline, conserva o total de cada mes -------------
     spline = Histospline(x, y, ano_base)
 
+    # Preenchimento da lacuna do periodo excluido (reta global x sazonal, o mesmo
+    # que o Holt-Winters usa em _completar_serie_mensal), so para exibir: os meses
+    # reconstruidos nao entram na histospline nem nas metricas.
+    x_rec = y_rec = np.array([])
+    if periodos:
+        mult = SAZONALIDADE_HW == "multiplicativa" and float(np.min(y)) > 0
+        grade, completa, obs = _completar_serie_mensal(x, y, PERIODO_SAZONAL, mult)
+        x_rec = (grade[~obs] + 0.5) / 12 + ano_base   # meio do mes, ano absoluto
+        y_rec = completa[~obs]
+
     base = {
         "arquivo":           arquivo,
         "nome":              os.path.splitext(os.path.basename(arquivo))[0],
@@ -575,6 +646,8 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
         "spline":            spline,
         "erro_conservacao":  spline.erro_conservacao(),   # ~0: confere a construcao
         "diaria":            spline.diario(),             # dia, valor, observado
+        "x_reconstruido":    x_rec,   # meses preenchidos na lacuna (ano absoluto)
+        "y_reconstruido":    y_rec,   # totais mensais preenchidos
     }
 
     # Sem extrapolacao: so a interpolacao (modelo_tendencia = None sinaliza ao
@@ -584,6 +657,7 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
                 "rotulo_modelo":     None,
                 "descricao_modelo":  [],
                 "r2_tendencia":      None,
+                "rmse_tendencia":    None,
                 "modelo_tendencia":  None,
                 "anos_previsao":     0,
                 "x_futuros":         np.array([]),
@@ -595,9 +669,12 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
     modelo_tendencia, hw = ajustar_holt_winters(
         x, y, passos_futuros=int(round(anos_previsao * PERIODO_SAZONAL)))
 
-    # R2 medido SO nos meses realmente observados (os reconstruidos para fechar
-    # o buraco do periodo excluido nao entram na conta).
-    r2_tend = r2_score(y, modelo_tendencia(x))
+    # R2 e RMSE medidos SO nos meses realmente observados (os reconstruidos para
+    # fechar o buraco do periodo excluido nao entram na conta), sobre os totais
+    # mensais: o RMSE sai na unidade do CSV por mes.
+    ajustado  = modelo_tendencia(x)
+    r2_tend   = r2_score(y, ajustado)
+    rmse_tend = float(np.sqrt(np.mean((y - ajustado) ** 2)))
 
     rotulo = ("Holt-Winters ("
               + ("multiplicativa" if hw["multiplicativa"] else "aditiva")
@@ -629,9 +706,9 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
     if hw["meses_reconstruidos"]:
         descricao.append(
             f"Serie mensal: {hw['meses_totais']} meses, sendo "
-            f"{hw['meses_reconstruidos']} reconstruidos (nivel interpolado x "
+            f"{hw['meses_reconstruidos']} reconstruidos (reta global x "
             f"sazonalidade tipica) so para manter o ciclo alinhado - eles nao "
-            f"entram no R2"
+            f"entram no R2 nem no RMSE"
         )
 
     # Ordem: Holt-Winters sobre os totais mensais REAIS (acima) e so depois a
@@ -651,6 +728,7 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
         "rotulo_modelo":     rotulo,
         "descricao_modelo":  descricao,
         "r2_tendencia":      r2_tend,
+        "rmse_tendencia":    rmse_tend,
         "modelo_tendencia":  modelo_tendencia,
         "anos_previsao":     anos_previsao,
         "x_futuros":         x_futuros,
@@ -658,17 +736,25 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
     }
 
 # --- Taxa diaria de mortalidade ---------------------------------------------
-# Pi(dia) = obitos(dia) / populacao(dia), por pessoa por dia (unidade do Pi do
-# SEIHRVS). Obitos: Holt-Winters nos totais mensais e histopolacao diaria do
-# observado + projetado (analisar_csv). Populacao: projecao anual do IBGE,
-# histopolada para dias.
+# Pi(dia) = obitos(dia) / populacao(dia), em obitos por pessoa por dia (unidade
+# do Pi do SEIHRVS), sobre a populacao brasileira inteira.
+#   Obitos e nascimentos: histopolacao diaria dos totais mensais (analisar_csv)
+#     e, se a extrapolacao estiver ligada, Holt-Winters nos totais mensais de
+#     cada serie, desagregado por dia do mesmo jeito.
+#   Populacao no periodo OBSERVADO: populacao anual total do IBGE histopolada
+#     para dias (populacao_diaria).
+#   Populacao no periodo PROJETADO: parte do valor diario do IBGE no ultimo dia
+#     observado e avanca pelo balanco P(d+1) = P(d) + nascimentos(d) - obitos(d),
+#     com nascimentos e obitos diarios do Holt-Winters.
 # Hipoteses (os dados nao permitem medi-las):
 #   - o valor anual do IBGE e a MEDIA da populacao no ano: a soma dos dias do ano
 #     da valor x dias do ano. O arquivo nao informa a data de referencia;
 #   - obitos de todas as causas sobre a populacao residente total: Pi igual para
 #     todas as idades e compartimentos, como no modelo;
-#   - a forma dentro do mes (obitos) e do ano (populacao) vem so da suavidade da
-#     PCHIP no acumulado.
+#   - a projecao da populacao e FECHADA: so nascimentos - obitos, sem o saldo
+#     migratorio;
+#   - a forma dentro do mes (obitos, nascimentos) e do ano (populacao) vem so da
+#     suavidade da PCHIP no acumulado.
 
 def ler_populacao_anual(arquivo=ARQUIVO_POPULACAO, linha=LINHA_POPULACAO):
     """CSV do Tabnet/IBGE (latin-1, ';', cabeçalho na 4ª linha) -> Series ano -> população."""
@@ -700,34 +786,60 @@ def populacao_diaria(pop_anual):
 def analisar_mortalidade(anos_previsao=QUANTIDADE_ANOS_PREVISAO,
                          excluir_periodo=EXCLUIR_PERIODO_PADRAO,
                          arquivo_obitos=ARQUIVO_OBITOS,
-                         arquivo_populacao=ARQUIVO_POPULACAO):
+                         arquivo_populacao=ARQUIVO_POPULACAO,
+                         extrapolar=True,
+                         arquivo_nascimentos=ARQUIVO_NASCIMENTOS):
     """
-    Taxa diária de mortalidade Pi = óbitos / população. Devolve o resultado da
-    análise dos óbitos (Holt-Winters, histospline) com `diaria` trocada por
-    dia, valor (= Pi, por pessoa-dia), obitos, populacao e observado, e:
-      mortalidade_anual -> por ano: óbitos, população média, Pi médio
+    Taxa diária de mortalidade Pi = óbitos / população (por pessoa por dia).
+    Devolve o resultado da análise dos óbitos (histospline e, se `extrapolar`,
+    Holt-Winters) com `diaria` trocada por dia, valor (= Pi), obitos,
+    nascimentos, populacao, populacao_ibge e observado, e:
+      mortalidade_anual -> por ano: óbitos, nascimentos, população média, Pi médio
       erro_populacao    -> maior |média diária do ano - valor do IBGE| (~0)
-      res_obitos        -> a análise original dos óbitos
+      res_obitos, res_nascimentos -> as análises originais
+      dia_ancora        -> último dia observado (início da projeção da população)
     """
-    res_obitos = analisar_csv(arquivo_obitos, anos_previsao=anos_previsao,
-                              excluir_periodo=excluir_periodo)
+    kw = dict(anos_previsao=anos_previsao, excluir_periodo=excluir_periodo,
+              extrapolar=extrapolar)
+    res_obitos = analisar_csv(arquivo_obitos, **kw)
+    res_nasc   = analisar_csv(arquivo_nascimentos, **kw)
     pop_anual  = ler_populacao_anual(arquivo_populacao)
     pop        = populacao_diaria(pop_anual)
 
-    obitos = res_obitos["diaria"]
-    datas  = pd.to_datetime(obitos["dia"])
-    faltando = pd.DatetimeIndex(datas).difference(pop.index)
+    # So os dias cobertos pelas duas series; observado = observado nas duas
+    juntos = res_obitos["diaria"].merge(res_nasc["diaria"], on="dia",
+                                        suffixes=("_obitos", "_nasc"))
+    if juntos.empty:
+        raise ValueError("Óbitos e nascimentos não têm nenhum dia em comum.")
+    datas     = pd.to_datetime(juntos["dia"])
+    obitos    = juntos["valor_obitos"].to_numpy()
+    nasc      = juntos["valor_nasc"].to_numpy()
+    observado = (juntos["observado_obitos"] & juntos["observado_nasc"]).to_numpy()
+
+    faltando = pd.DatetimeIndex(datas[observado]).difference(pop.index)
     if len(faltando):
-        raise ValueError(f"A projeção do IBGE não cobre {len(faltando)} dias "
+        raise ValueError(f"A população do IBGE não cobre {len(faltando)} dias "
                          f"({faltando.min().date()} a {faltando.max().date()}).")
-    populacao = pop.reindex(datas).to_numpy()
+    pop_ibge  = pop.reindex(datas).to_numpy()   # NaN se o IBGE nao cobrir o dia
+    populacao = pop_ibge.copy()
+
+    # Projecao: a partir do ultimo dia observado, P(d+1) = P(d) + B(d) - D(d)
+    i_ancora  = int(np.flatnonzero(observado)[-1])
+    projetado = np.arange(len(observado)) > i_ancora
+    if projetado.any():
+        if not np.all(np.diff(juntos["dia"].map(datetime.date.toordinal).to_numpy()[i_ancora:]) == 1):
+            raise ValueError("A projeção precisa de dias consecutivos após o último dia observado.")
+        saldo = (nasc - obitos)[i_ancora:-1]          # balanco do dia anterior
+        populacao[projetado] = pop_ibge[i_ancora] + np.cumsum(saldo)
 
     diaria = pd.DataFrame({
-        "dia":       obitos["dia"],
-        "valor":     obitos["valor"].to_numpy() / populacao,   # Pi, por pessoa por dia
-        "obitos":    obitos["valor"].to_numpy(),
-        "populacao": populacao,
-        "observado": obitos["observado"].to_numpy(),
+        "dia":            juntos["dia"],
+        "valor":          obitos / populacao,   # Pi, obitos por pessoa por dia
+        "obitos":         obitos,
+        "nascimentos":    nasc,
+        "populacao":      populacao,
+        "populacao_ibge": pop_ibge,
+        "observado":      observado,
     })
 
     ano = datas.dt.year.to_numpy()
@@ -735,6 +847,7 @@ def analisar_mortalidade(anos_previsao=QUANTIDADE_ANOS_PREVISAO,
     anual = pd.DataFrame({
         "dias":            g.size(),
         "obitos":          g["obitos"].sum(),
+        "nascimentos":     g["nascimentos"].sum(),
         "populacao_media": g["populacao"].mean(),
         "Pi_medio":        g["valor"].mean(),
     })
@@ -746,14 +859,19 @@ def analisar_mortalidade(anos_previsao=QUANTIDADE_ANOS_PREVISAO,
         "arquivo":           "mortalidade_brasil",       # chave da janela na interface
         "nome":              "mortalidade_brasil",       # -> mortalidade_brasil_diaria.csv
         "col_valor":         "Taxa diária de mortalidade (Pi, óbitos por pessoa por dia)",
-        "rotulo_modelo":     f"{res_obitos['rotulo_modelo']} dos óbitos",
+        "rotulo_modelo":     (f"{res_obitos['rotulo_modelo']} dos óbitos"
+                              if res_obitos["rotulo_modelo"] else None),
         "diaria":            diaria,
         "mortalidade_anual": anual,
         "populacao_anual":   pop_anual,
         "erro_populacao":    float((media_ano - pop_anual).abs().max()),
         "arquivo_obitos":    arquivo_obitos,
         "arquivo_populacao": arquivo_populacao,
+        "arquivo_nascimentos": arquivo_nascimentos,
+        "erro_conservacao":  max(res_obitos["erro_conservacao"], res_nasc["erro_conservacao"]),
         "res_obitos":        res_obitos,
+        "res_nascimentos":   res_nasc,
+        "dia_ancora":        juntos["dia"].iloc[i_ancora],
     }
 
 def ano_mes(x_absoluto):
@@ -789,6 +907,8 @@ def resumo_texto(res, incluir_previsao=True):
     """Monta o resumo textual da análise (mesmo conteúdo impresso pelo script)."""
     if res.get("tipo") == "mortalidade":
         return resumo_mortalidade(res)
+    if res.get("tipo") == "saldo":
+        return resumo_saldo(res)
     ano_base = res["ano_base"]
     linhas = [
         f"Dados carregados de '{res['arquivo']}'",
@@ -807,17 +927,11 @@ def resumo_texto(res, incluir_previsao=True):
         f"[Interpolacao] Histospline (PCHIP no acumulado)  |  maior erro do total "
         f"mensal = {res['erro_conservacao']:.2e}",
     ]
-    if res.get("integral"):
-        integ = res["integral"]
-        linhas += [
-            "",
-            f"[Integral] {descrever_integral(integ)}",
-            f"  Soma dos totais mensais (comparacao): {formata_numero(integ['soma_mensal'])}",
-        ]
     if res["modelo_tendencia"] is not None:
         linhas += [
             "",
-            f"[Extrapolacao] {res['rotulo_modelo']}  |  R2 (fit) = {res['r2_tendencia']:.4f}",
+            f"[Extrapolacao] {res['rotulo_modelo']}  |  R2 (fit) = {res['r2_tendencia']:.4f}  |  "
+            f"RMSE = {formata_numero(res['rmse_tendencia'])} /mes",
         ]
         linhas += [f"  {d}" for d in res["descricao_modelo"]]
 
@@ -831,25 +945,47 @@ def resumo_texto(res, incluir_previsao=True):
 
     return "\n".join(linhas)
 
+def resumo_saldo(res):
+    """Resumo do saldo: as duas histopolações e a integral do saldo diário."""
+    integ = res["integral"]
+    d     = res["diaria"]
+    return "\n".join([
+        resumo_texto(res["res_a"], incluir_previsao=False),
+        "",
+        resumo_texto(res["res_b"], incluir_previsao=False),
+        "",
+        f"[Saldo] {res['col_valor']} por dia = diferenca das duas histosplines  |  "
+        f"{d['dia'].iloc[0]} a {d['dia'].iloc[-1]} ({len(d)} dias)",
+        f"[Integral do saldo] {descrever_integral(integ)}"
+    ])
+
 def resumo_mortalidade(res):
-    """Resumo da taxa diária de mortalidade: óbitos (Holt-Winters) + Pi por ano."""
+    """Resumo da taxa diária de mortalidade: óbitos, nascimentos, população e Pi por ano."""
     d = res["diaria"]
     linhas = [
         resumo_texto(res["res_obitos"], incluir_previsao=False),
         "",
+        resumo_texto(res["res_nascimentos"], incluir_previsao=False),
+        "",
         f"[Populacao] '{res['arquivo_populacao']}', linha '{LINHA_POPULACAO}' "
         f"({res['populacao_anual'].index[0]}-{res['populacao_anual'].index[-1]})",
-        f"  Histopolacao anual -> diaria  |  maior |media do ano - valor IBGE| = "
-        f"{res['erro_populacao']:.2e}",
+        f"  Histopolacao anual -> diaria ate {res['dia_ancora']}  |  maior |media do ano - "
+        f"valor IBGE| = {res['erro_populacao']:.2e}",
+    ]
+    if (~d["observado"]).any():
+        linhas.append(f"  Depois de {res['dia_ancora']}: P(d+1) = P(d) + nascimentos(d) - obitos(d) "
+                      f"(Holt-Winters; sem saldo migratorio)")
+    linhas += [
         "",
-        f"[Mortalidade] Pi = obitos/dia / populacao/dia (por pessoa por dia)  |  "
+        f"[Mortalidade] Pi = obitos/dia / populacao/dia (obitos por pessoa por dia)  |  "
         f"{d['dia'].iloc[0]} a {d['dia'].iloc[-1]}  |  "
         f"{int(d['observado'].sum())} dias observados, {int((~d['observado']).sum())} previstos",
     ]
     for ano, l in res["mortalidade_anual"].iterrows():
-        linhas.append(f"  {ano}: Pi medio = {l['Pi_medio']:.4e}  "
-                      f"({formata_numero(l['Pi_medio'] * 1e5, 3)} por 100 mil/dia)  |  "
-                      f"obitos = {formata_numero(l['obitos'])} em {int(l['dias'])} dias  |  "
+        linhas.append(f"  {ano}: Pi medio = {l['Pi_medio']:.4e} por pessoa por dia  |  "
+                      f"obitos = {formata_numero(l['obitos'])}  |  "
+                      f"nascimentos = {formata_numero(l['nascimentos'])}  |  "
+                      f"em {int(l['dias'])} dias  |  "
                       f"populacao media = {formata_numero(l['populacao_media'])}")
     return "\n".join(linhas)
 
@@ -897,6 +1033,8 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     """
     if res.get("tipo") == "mortalidade":
         return montar_figura_mortalidade(res, fig=fig, titulo=titulo, figsize=figsize)
+    if res.get("tipo") == "saldo":
+        return montar_figura_saldo(res, fig=fig, titulo=titulo, figsize=figsize)
     ano_base = res["ano_base"]
 
     if fig is None:
@@ -930,13 +1068,15 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
                    if len(res["x_excluido"]) else res["y_excluido"])
     y_prev_mes  = (res["estimativa_futura"] / _dias_do_mes(x_fut_mes)
                    if len(x_fut_mes) else res["estimativa_futura"])
+    x_rec       = res.get("x_reconstruido", np.array([]))
+    y_rec       = (res["y_reconstruido"] / _dias_do_mes(x_rec)
+                   if len(x_rec) else np.array([]))
 
-    # Escala do eixo y pelo que entra no modelo (dados usados, spline e projeção),
-    # com a mesma folga de 5% do autoscale. Um pico no período excluído - 1,97 mi
-    # em ago/2019 nas vacinas, ~5x um mês típico - esticava o eixo e espremia todo
-    # o resto no rodapé do gráfico.
+    # Escala do eixo y pelo que entra no modelo (dados usados, spline, lacuna
+    # preenchida e projeção), com a mesma folga de 5% do autoscale: um pico no
+    # período excluído esticaria o eixo e espremeria todo o resto no rodapé.
     usados       = np.concatenate([y_mensal, y_plot[np.isfinite(y_plot)],
-                                   y_prev_mes, y_fut])
+                                   y_prev_mes, y_fut, y_rec])
     folga        = 0.05 * (usados.max() - usados.min())
     y_min, y_max = usados.min() - folga, usados.max() + folga
 
@@ -962,6 +1102,10 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
 
     ax.scatter(res["x_mensal"], y_mensal,
                color="crimson", zorder=5, s=18, alpha=0.7, label="Dados mensais (media/dia)")
+    if len(x_rec):
+        ax.plot(x_rec, y_rec, color="darkorange", lw=1.2, linestyle=":", marker="D",
+                markersize=4, zorder=5,
+                label="Lacuna preenchida: reta global × sazonal (média/dia)")
     linha, = ax.plot(x_plot + ano_base, y_plot, color="royalblue", lw=1.5,
                      label="Histospline (taxa diaria)")
     linha.taxa = True   # formata_tooltip: valor e taxa, nao media do mes
@@ -973,19 +1117,7 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
                         label="Previsao em taxa diaria (Holt-Winters + histospline)")
         proj.taxa = True
 
-    # Área integrada (res["integral"]): acima de zero soma, abaixo subtrai
-    areas = []
-    if res.get("integral"):
-        for i, (a, b) in enumerate(res["integral"]["trechos"]):
-            xa = np.linspace(a - ano_base, b - ano_base, 4000)
-            ya = res["spline"](xa)
-            for cond, cor, rot in ((ya >= 0, "seagreen", "Área positiva"),
-                                   (ya <= 0, "indianred", "Área negativa")):
-                areas.append(ax.fill_between(xa + ano_base, ya, 0, where=cond,
-                                             interpolate=True, color=cor, alpha=0.18,
-                                             zorder=1, label=rot if i == 0 else None))
     ax.set_ylim(y_min, y_max)
-    # Séries de diferença (ex.: saídas - entradas) trocam de sinal: marca o zero
     if y_min < 0 < y_max:
         ax.axhline(0, color="black", lw=0.8, alpha=0.6, zorder=1)
 
@@ -994,7 +1126,7 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     titulo_padrao = (f"Interpolação e Extrapolação - {res['col_valor']}" if extrapola
                      else f"Interpolação - {res['col_valor']}")
     if periodos:
-        titulo_padrao += f"\n(sem o período excluído: {descrever_periodos(periodos)})"
+        titulo_padrao += f"\n(sem o período da COVID-19: {descrever_periodos(periodos)})"
     ax.set_title(titulo or titulo_padrao, fontsize=14, fontweight="bold")
     ax.set_xlabel("Ano")
     ax.set_ylabel(textwrap.fill(label_y or f"{res['col_valor']} por dia", 40))
@@ -1002,19 +1134,18 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
 
-    # As áreas sombreadas ficam fora do tooltip (não são pontos mensais)
-    alvos  = [a for a in ax.collections + ax.lines if a not in areas]
-    cursor = mplcursors.cursor(alvos, hover=False)
+    cursor = mplcursors.cursor(ax.collections + ax.lines, hover=False)
     cursor.connect("add", formata_tooltip)
 
     return fig, ax, cursor
 
 def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
     """
-    Três painéis com o mesmo eixo de datas: óbitos/dia, população/dia (com os
-    valores anuais do IBGE no meio de cada ano) e Pi em óbitos por 100 mil
-    habitantes por dia. Observado em azul, previsão em roxo tracejado; períodos
-    excluídos do Holt-Winters ficam vazios (sem total para histopolar).
+    Três painéis com o mesmo eixo de datas: nascimentos e óbitos por dia,
+    população brasileira total por dia (IBGE histopolado no observado; na
+    previsão, população + nascimentos - óbitos) e Pi em óbitos por pessoa por
+    dia. Observado em linha cheia, previsão tracejada; períodos excluídos ficam
+    vazios (sem total para histopolar).
     Retorna (fig, eixos, cursor), como `montar_figura`.
     """
     if fig is None:
@@ -1028,38 +1159,75 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
     d = res["diaria"].copy()
     d.index = pd.to_datetime(d.pop("dia"))
     d = d.asfreq("D")
+    obs  = d["observado"].eq(True)
+    prev = d["observado"].eq(False)
 
-    paineis = (("obitos",    1.0,  "Óbitos/dia",                  0),
-               ("populacao", 1e-6, "População (milhões)",         3),
-               ("valor",     1e5,  "Pi (por 100 mil hab. por dia)", 3))
-    for ax, (coluna, escala, rotulo, casas) in zip(eixos, paineis):
-        for previsto, cor, estilo, legenda in ((False, "royalblue", "-", "observado"),
-                                               (True, "purple", "--", "previsto")):
-            parte = d[coluna].where(d["observado"].eq(not previsto) & d["observado"].notna())
-            linha, = ax.plot(parte.index, parte * escala, estilo, color=cor, lw=1.2, label=legenda)
-            linha.rotulo_tooltip = (rotulo, escala, casas, coluna == "valor")
-        ax.set_ylabel(textwrap.fill(rotulo, 22))
-        ax.grid(True, linestyle="--", alpha=0.5)
+    def _linha(ax, serie, mascara, cor, estilo, legenda, rotulo, casas, eh_pi=False):
+        linha, = ax.plot(serie.index, serie.where(mascara), estilo, color=cor, lw=1.2, label=legenda)
+        linha.rotulo_tooltip = (rotulo, 1.0, casas, eh_pi)
 
-    # Valores anuais do IBGE no meio do ano: a media diaria de cada ano e igual a eles
+    # --- Painel 1: nascimentos e óbitos por dia ------------------------------
+    for coluna, cor, rotulo in (("nascimentos", "seagreen", "Nascimentos/dia"),
+                                ("obitos", "royalblue", "Óbitos/dia")):
+        _linha(eixos[0], d[coluna], obs, cor, "-", f"{rotulo} (observado)", rotulo, 0)
+        if prev.any():
+            _linha(eixos[0], d[coluna], prev, cor, "--", f"{rotulo} (Holt-Winters)", rotulo, 0)
+    # Lacuna do periodo excluido preenchida (reta global x sazonal), media/dia do mes
+    for chave, rotulo, cor in (("res_nascimentos", "Nascimentos", "seagreen"),
+                               ("res_obitos", "Óbitos", "royalblue")):
+        r = res.get(chave) or {}
+        x_rec = r.get("x_reconstruido", np.array([]))
+        if len(x_rec):
+            datas = pd.to_datetime([datetime.date(*ano_mes(v), 15) for v in x_rec])
+            pts, = eixos[0].plot(datas, r["y_reconstruido"] / _dias_do_mes(x_rec), ":",
+                                 color=cor, marker="D", markersize=4, markerfacecolor="darkorange",
+                                 markeredgecolor="darkorange", lw=1.0,
+                                 label=f"{rotulo}: lacuna preenchida (reta global × sazonal)")
+            pts.rotulo_tooltip = (f"{rotulo} preenchido - média/dia do mês", 1.0, 0, False)
+    eixos[0].set_ylabel("Pessoas por dia")
+
+    # --- Painel 2: população total por dia ----------------------------------
+    _linha(eixos[1], d["populacao"], obs, "royalblue", "-",
+           "IBGE histopolado (diário)", "População", 0)
+    if prev.any():
+        _linha(eixos[1], d["populacao"], prev, "purple", "--",
+               "Projeção: população + nascimentos - óbitos", "População projetada", 0)
+        _linha(eixos[1], d["populacao_ibge"], prev, "gray", ":",
+               "Projeção do IBGE (comparação)", "População IBGE", 0)
     pop  = res["populacao_anual"]
     anos = pop.index[(pop.index >= d.index.min().year) & (pop.index <= d.index.max().year)]
     pontos = eixos[1].scatter(pd.to_datetime([datetime.date(a, 7, 2) for a in anos]),
-                              pop.loc[anos] * 1e-6, color="crimson", s=18, zorder=5,
+                              pop.loc[anos], color="crimson", s=18, zorder=5,
                               label="IBGE anual (média do ano)")
-    pontos.rotulo_tooltip = ("População IBGE do ano (milhões)", 1e-6, 3, False)
+    pontos.rotulo_tooltip = ("População IBGE do ano", 1.0, 0, False)
+    eixos[1].set_ylabel("População (pessoas)")
+    eixos[1].yaxis.set_major_formatter(
+        matplotlib.ticker.FuncFormatter(lambda v, _: formata_numero(v)))
 
+    # --- Painel 3: Pi por pessoa por dia ------------------------------------
+    _linha(eixos[2], d["valor"], obs, "royalblue", "-", "observado",
+           "Pi (óbitos por pessoa por dia)", 0, eh_pi=True)
+    if prev.any():
+        _linha(eixos[2], d["valor"], prev, "purple", "--", "previsto",
+               "Pi (óbitos por pessoa por dia)", 0, eh_pi=True)
+    eixos[2].set_ylabel(textwrap.fill("Pi (óbitos por pessoa por dia)", 22))
+
+    for ax in eixos:
+        ax.grid(True, linestyle="--", alpha=0.5)
+        ax.legend(loc="upper left", fontsize=8)
+    # Painel 1: legenda em duas colunas no canto direito, onde as curvas ficam
+    # mais baixas (nascimentos em queda), para nao cobrir a serie de 2015-2019
+    eixos[0].legend(loc="upper right", fontsize=7, ncol=2)
+    eixos[0].set_ylim(top=eixos[0].get_ylim()[1] * 1.15)
     for ini, fim in res.get("excluir_periodo") or []:
         for ax in eixos:
             ax.axvspan(pd.Timestamp(_dia_para_data(ini)), pd.Timestamp(_dia_para_data(fim)),
                        color="gray", alpha=0.08, zorder=0)
-    eixos[0].legend(loc="upper left")
-    eixos[1].legend(loc="upper left")
     eixos[2].set_xlabel("Data")
 
     titulo_padrao = "Taxa diária de mortalidade - Brasil (óbitos / população)"
     if res.get("excluir_periodo"):
-        titulo_padrao += (f"\n(Holt-Winters sem o período excluído: "
+        titulo_padrao += (f"\n(sem o período da Covid-19: "
                           f"{descrever_periodos(res['excluir_periodo'])})")
     eixos[0].set_title(titulo or titulo_padrao, fontsize=13, fontweight="bold")
     fig.tight_layout()
@@ -1069,47 +1237,138 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
     cursor.connect("add", _tooltip_mortalidade)
     return fig, eixos, cursor
 
+def montar_figura_saldo(res, fig=None, titulo=None, figsize=(14, 8)):
+    """
+    Dois painéis com o mesmo eixo de datas: (1) as duas séries histopoladas
+    (taxa diária) com a média diária de cada mês como pontos; (2) o saldo
+    diário (diferença das duas), com a área integrada sombreada - verde acima
+    de zero, vermelha abaixo - e o saldo mensal (média/dia) como pontos.
+    Retorna (fig, eixos, cursor), como `montar_figura`.
+    """
+    if fig is None:
+        fig = plt.figure(figsize=figsize)
+    else:
+        fig.clear()
+    eixos = fig.subplots(2, 1, sharex=True)
+
+    # Grade diaria completa: dias do periodo excluido viram NaN e interrompem a linha
+    d = res["diaria"].copy()
+    d.index = pd.to_datetime(d.pop("dia"))
+    d = d.asfreq("D")
+
+    def _meio_do_mes(x_abs):
+        return pd.to_datetime([datetime.date(*ano_mes(v), 15) for v in x_abs])
+
+    # --- Painel 1: as duas séries histopoladas -------------------------------
+    ax = eixos[0]
+    for chave_res, coluna, rotulo, cor in (("res_a", res["coluna_a"], res["nome_a"], "darkorange"),
+                                           ("res_b", res["coluna_b"], res["nome_b"], "royalblue")):
+        linha, = ax.plot(d.index, d[coluna], color=cor, lw=1.2,
+                         label=f"{rotulo} (histospline, taxa diária)")
+        linha.rotulo_tooltip = (f"{rotulo}/dia", 1.0, 1, False)
+        r = res[chave_res]
+        pontos = ax.scatter(_meio_do_mes(r["x_mensal"]), r["y_mensal"] / _dias_do_mes(r["x_mensal"]),
+                            color=cor, s=14, alpha=0.7, zorder=5, edgecolors="black", linewidths=0.3)
+        pontos.rotulo_tooltip = (f"{rotulo} - média/dia do mês", 1.0, 1, False)
+    ax.set_ylabel("Pessoas por dia")
+    ax.legend(loc="upper left")
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    # --- Painel 2: saldo diário e área integrada -----------------------------
+    ax = eixos[1]
+    saldo = d["valor"]
+    for cond, cor, rot in ((saldo >= 0, "seagreen", "Área positiva"),
+                           (saldo <= 0, "indianred", "Área negativa")):
+        ax.fill_between(d.index, saldo, 0, where=cond.to_numpy(), interpolate=True,
+                        color=cor, alpha=0.25, zorder=1, label=rot)
+    linha, = ax.plot(d.index, saldo, color="black", lw=1.0,
+                     label="Saldo diário (diferença das histosplines)")
+    linha.rotulo_tooltip = ("Saldo/dia", 1.0, 1, False)
+    pontos = ax.scatter(_meio_do_mes(res["x_mensal"]), res["y_mensal"] / _dias_do_mes(res["x_mensal"]),
+                        color="crimson", s=16, zorder=5, label="Saldo mensal (média/dia)")
+    pontos.rotulo_tooltip = ("Saldo - média/dia do mês", 1.0, 1, False)
+    ax.axhline(0, color="black", lw=0.8, alpha=0.6, zorder=1)
+    ax.set_ylabel(textwrap.fill(f"{res['col_valor']} por dia", 30))
+    ax.set_xlabel("Data")
+    ax.legend(loc="upper left")
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    for ini, fim in res.get("excluir_periodo") or []:
+        for eixo in eixos:
+            eixo.axvspan(pd.Timestamp(_dia_para_data(ini)), pd.Timestamp(_dia_para_data(fim)),
+                         color="gray", alpha=0.08, zorder=0)
+
+    titulo_padrao = f"Saldo migratório - {res['col_valor']}"
+    if res.get("excluir_periodo"):
+        titulo_padrao += f"\n(sem o período da Covid-19: {descrever_periodos(res['excluir_periodo'])})"
+    eixos[0].set_title(titulo or titulo_padrao, fontsize=13, fontweight="bold")
+    fig.tight_layout()
+
+    cursor = mplcursors.cursor([a for eixo in eixos for a in eixo.lines + eixo.collections
+                                if hasattr(a, "rotulo_tooltip")], hover=False)
+    cursor.connect("add", _tooltip_mortalidade)
+    return fig, eixos, cursor
+
 def _dia_para_data(x_absoluto):
     """Ano fracionário (datas reais) -> datetime.date."""
     return datetime.date.fromordinal(int(round(float(_ano_para_dia(x_absoluto)))))
 
 def _tooltip_mortalidade(sel):
-    """Data e valor do painel; no painel de Pi, também por pessoa-dia."""
+    """Data e valor do painel; Pi em notação científica (por pessoa por dia)."""
     rotulo, escala, casas, eh_pi = sel.artist.rotulo_tooltip
     data  = mdates.num2date(sel.target[0]).date()
-    texto = f"{data:%d/%m/%Y}\n{rotulo}: {formata_numero(sel.target[1], casas)}"
-    if eh_pi:
-        texto += f"\nPi = {sel.target[1] / escala:.4e} por pessoa-dia"
-    sel.annotation.set_text(texto)
+    valor = f"{sel.target[1] / escala:.4e}" if eh_pi else formata_numero(sel.target[1], casas)
+    sel.annotation.set_text(f"{data:%d/%m/%Y}\n{rotulo}: {valor}")
 
 
 # =============================================================================
 # 6. EXECUÇÃO COMO SCRIPT (a interface esta em interpolate_gui.py)
 # =============================================================================
 
-def salvar_serie_diaria(res, diretorio=DIRETORIO_SAIDA_DIARIA):
-    """
-    Grava a série diária (observado + previsão) em '<nome>_diaria.csv', no
-    mesmo formato dos CSVs do projeto (separador ';'). Com período excluído o
-    nome ganha '_sem_covid' (ou '_com_exclusao', para outros períodos), para
-    não sobrescrever a versão com a série inteira. Devolve o caminho.
-    """
-    periodos = res.get("excluir_periodo") or []
+def _gravar_tabela(colunas, observado, nome, periodos, diretorio):
+    """Grava `colunas` + tipo (observado/previsto) em '<nome>[sufixo].csv'; devolve o caminho."""
+    periodos = periodos or []
     sufixo   = ("" if not periodos else
                 "_sem_covid" if periodos == unir_periodos(PERIODO_COVID) else "_com_exclusao")
     os.makedirs(diretorio, exist_ok=True)
-    caminho = os.path.join(diretorio, f"{res['nome']}_diaria{sufixo}.csv")
-    df = res["diaria"].copy()
-    df["tipo"] = np.where(df.pop("observado"), "observado", "previsto")
-    df.to_csv(caminho, sep=SEPARADOR_CSV, index=False)
+    caminho = os.path.join(diretorio, f"{nome}{sufixo}.csv")
+    pd.DataFrame({**colunas, "tipo": np.where(observado, "observado", "previsto")}
+                 ).to_csv(caminho, sep=SEPARADOR_CSV, index=False)
     return caminho
 
+def salvar_nascimentos_diarios(res, diretorio=DIRETORIO_SAIDA_DIARIA):
+    """
+    Nascimentos por dia (o Λ do SEIHRVS) da análise do CSV de nascimentos, em
+    'nascimentos_diarios.csv' (separador ';'): dia; nascimentos (pessoas/dia);
+    tipo ('observado' ou 'previsto' pelo Holt-Winters). Com período excluído o
+    nome ganha '_sem_covid' (ou '_com_exclusao'). Devolve o caminho.
+    """
+    d = res["diaria"]
+    return _gravar_tabela({"dia": d["dia"], "nascimentos": d["valor"]}, d["observado"],
+                          "nascimentos_diarios", res.get("excluir_periodo"), diretorio)
+
+def salvar_taxa_obitos_diaria(res, diretorio=DIRETORIO_SAIDA_DIARIA):
+    """
+    Taxa de óbito por dia (o π do SEIHRVS) da análise de mortalidade, em
+    'taxa_obitos_diaria.csv' (separador ';'): dia; Pi (óbitos por pessoa por
+    dia); obitos e populacao (de onde Pi = obitos / populacao sai); tipo.
+    Com período excluído o nome ganha '_sem_covid' (ou '_com_exclusao').
+    Devolve o caminho.
+    """
+    if res.get("tipo") != "mortalidade":
+        raise ValueError("A taxa de óbito sai da análise de óbitos (analisar_mortalidade).")
+    d = res["diaria"]
+    return _gravar_tabela({"dia": d["dia"], "Pi": d["valor"],
+                           "obitos": d["obitos"], "populacao": d["populacao"]},
+                          d["observado"], "taxa_obitos_diaria",
+                          res.get("excluir_periodo"), diretorio)
+
 def main():
-    res = analisar_csv(ARQUIVO_CSV,
+    res = analisar_csv(ARQUIVO_NASCIMENTOS,
                        separador=SEPARADOR_CSV,
                        anos_previsao=QUANTIDADE_ANOS_PREVISAO)
     print(resumo_texto(res))
-    print(f"\nSerie diaria gravada em '{salvar_serie_diaria(res)}'")
+    print(f"\nNascimentos diarios gravados em '{salvar_nascimentos_diarios(res)}'")
     montar_figura(res)
     plt.show()
 

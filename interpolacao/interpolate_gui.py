@@ -48,6 +48,11 @@ def descrever_csv(arquivo, separador):
     nome = os.path.basename(arquivo)
     try:
         _, col_valor = itp.ler_colunas(arquivo, separador)
+        if itp.eh_arquivo_obitos(arquivo):
+            if not os.path.isfile(itp.ARQUIVO_POPULACAO):
+                return (f"{nome}   ({col_valor} - falta "
+                        f"{os.path.basename(itp.ARQUIVO_POPULACAO)} para a taxa de mortalidade)")
+            return f"{nome}   ({col_valor})"
         return f"{nome}   ({col_valor})"
     except Exception:
         return f"{nome}   (cabecalho nao lido)"
@@ -71,25 +76,17 @@ def linhas_diferenca():
     for rotulo, (arq_a, arq_b, _) in SERIES_DIFERENCA.items():
         faltando = [a for a in (arq_a, arq_b)
                     if not os.path.isfile(os.path.join(itp.DIRETORIO_DADOS, a))]
-        texto = rotulo + (f"   (falta {', '.join(faltando)})" if faltando else "")
+        texto = (f"Saldo migratório: {rotulo}"
+                 + (f"   (falta {', '.join(faltando)})" if faltando else ""))
         linhas.append([sg.Checkbox(texto, default=False, key=("-DIF-", rotulo),
                                    disabled=bool(faltando),
                                    font=(FONT_FAMILY, FONT_SIZE))])
     return linhas
 
 
-def linha_mortalidade():
-    """Checkbox da taxa diária de mortalidade; desabilitado se faltar algum CSV."""
-    faltando = [os.path.basename(a) for a in (itp.ARQUIVO_OBITOS, itp.ARQUIVO_POPULACAO)
-                if not os.path.isfile(a)]
-    texto = ("Taxa diária de mortalidade (óbitos ÷ população IBGE, ambos histopolados)"
-             + (f"   (falta {', '.join(faltando)})" if faltando else ""))
-    return [[sg.Checkbox(texto, default=False, key="-MORT-", disabled=bool(faltando),
-                         font=(FONT_FAMILY, FONT_SIZE))]]
-
-
 def montar_janela_principal(arquivos, separador):
-    linhas = linhas_checkbox(arquivos, separador)
+    # O saldo migratório entra na mesma lista dos CSVs, logo abaixo deles
+    linhas = linhas_checkbox(arquivos, separador) + linhas_diferenca()
     # Sem altura fixa a coluna se ajusta ao conteudo e nenhum CSV fica cortado,
     # seja qual for a fonte. A altura fixa anterior (30 px por linha) era menor
     # que a linha real (33 px), e o ultimo arquivo sumia sem barra de rolagem.
@@ -102,6 +99,8 @@ def montar_janela_principal(arquivos, separador):
     )
 
     opcoes = [
+        [sg.Checkbox("Extrapolar com Holt-Winters", default=False, key="-HW-",
+                     enable_events=True)],
         [sg.Text("Anos de previsão:", size=(18, 1)),
          sg.Spin([i for i in range(1, 51)], initial_value=itp.QUANTIDADE_ANOS_PREVISAO,
                  key="-ANOS-", size=(5, 1))],
@@ -114,12 +113,6 @@ def montar_janela_principal(arquivos, separador):
                  font=(FONT_FAMILY, FONT_SIZE))], 
         [sg.Frame("Arquivos CSV", [[coluna_csvs]], expand_x=True)],
         [sg.Button("Marcar todos"), sg.Button("Limpar seleção")],
-        [sg.Frame("Séries derivadas (diferença mês a mês, só interpolação + integral)",
-                  linhas_diferenca(),
-                  expand_x=True)],
-        [sg.Frame("Taxa de mortalidade (Pi do SEIHRVS, previsão pelo Holt-Winters dos óbitos)",
-                  linha_mortalidade(),
-                  expand_x=True)],
         [sg.Frame("Opções", opcoes, expand_x=True)],
         [sg.Button("Gerar gráficos", bind_return_key=True),
          sg.Button("Fechar gráficos"), sg.Push(), sg.Button("Sair")]
@@ -138,8 +131,38 @@ class BarraFerramentas(NavigationToolbar2Tk):
         super().__init__(canvas, pai, pack_toolbar=False)
 
 
-def abrir_janela_grafico(res):
-    """Cria (ou recria) a janela de gráfico de um CSV e desenha a análise nela."""
+def _texto_ajuste(nome, r):
+    """'<nome>: R² Holt-Winters = 0,9501  |  RMSE = 6.789 nascimentos/mês'."""
+    unidade = r["col_valor"].split(" no ")[0].lower()   # "Nascimentos no Brasil" -> "nascimentos"
+    return (f"{nome}R² do Holt-Winters = {itp.formata_numero(r['r2_tendencia'], 4)}  |  "
+            f"RMSE da série temporal = {itp.formata_numero(r['rmse_tendencia'])} {unidade}/mês")
+
+
+def linhas_consideracoes(res):
+    """
+    Considerações abaixo do gráfico:
+      saldo migratório -> só a integral do saldo diário;
+      demais séries    -> R² e RMSE do Holt-Winters sobre os totais mensais
+                          observados (nada, se a extrapolação estiver desligada).
+    Na mortalidade aparecem os dois ajustes que a geram: óbitos e nascimentos.
+    """
+    negrito = (FONT_FAMILY, FONT_SIZE, "bold")
+    if res.get("tipo") == "saldo":
+        return [[sg.Text(f"Integral do saldo migratório: {itp.descrever_integral(res['integral'])}",
+                         font=negrito)]]
+    if res.get("tipo") == "mortalidade":
+        ajustes = [("Óbitos - ", res["res_obitos"]), ("Nascimentos - ", res["res_nascimentos"])]
+    else:
+        ajustes = [("", res)]
+    return [[sg.Text(_texto_ajuste(nome, r), font=negrito)]
+            for nome, r in ajustes if r.get("rmse_tendencia") is not None]
+
+
+def abrir_janela_grafico(res, gravados=()):
+    """
+    Cria (ou recria) a janela de gráfico de um CSV e desenha a análise nela.
+    `gravados`: caminhos dos CSVs já gravados para esta análise (mostrados na janela).
+    """
     arquivo = res["arquivo"]
     fechar_janela_grafico(arquivo)
 
@@ -153,35 +176,7 @@ def abrir_janela_grafico(res):
         [sg.Canvas(key="-TOOLBAR-", size=(largura_px, 40))],
         [sg.Canvas(key="-CANVAS-", size=(largura_px, altura_px))],
     ]
-    if res["modelo_tendencia"] is not None:
-        # R2 da extrapolacao REALMENTE plotada (curva roxa).
-        layout.append([sg.Text(f"R² - {res['rotulo_modelo']} (curva plotada): "
-                               f"{res['r2_tendencia']:.4f}",
-                               font=(FONT_FAMILY, FONT_SIZE, "bold"))])
-    if res.get("integral"):
-        integ = res["integral"]
-        layout += [
-            [sg.Text(f"Integral da histospline: {itp.descrever_integral(integ)}",
-                     font=(FONT_FAMILY, FONT_SIZE, "bold"))]
-        ]
-    if res.get("tipo") == "mortalidade":
-        anual = res["mortalidade_anual"]
-        layout += [
-            [sg.Text(f"Pi médio por ano (por 100 mil hab./dia): " + "  ".join(
-                f"{ano}: {itp.formata_numero(pi * 1e5, 3)}" for ano, pi in anual["Pi_medio"].items()),
-                size=(130, None))],
-            [sg.Text(f"População IBGE histopolada - maior |média do ano - valor anual| "
-                     f"(deve ser ~0): {res['erro_populacao']:.2e}")],
-        ]
-    layout += [
-        # A histospline conserva o total de cada mes por construcao: o erro so
-        # confirma isso (fica no nivel do arredondamento), nao mede ajuste.
-        [sg.Text(f"Histospline{' dos óbitos' if res.get('tipo') == 'mortalidade' else ''}"
-                 f" - maior erro do total mensal (deve ser ~0): "
-                 f"{res['erro_conservacao']:.2e}")],
-        [sg.Button("Gravar série diária (CSV)", key=("-SALVAR-", arquivo)),
-         sg.Push(), sg.Button("Fechar", key=("-FECHAR-", arquivo))],
-    ]
+    layout += linhas_consideracoes(res)
     periodos = res.get("excluir_periodo")
     sufixo   = f" (sem {itp.descrever_periodos(periodos)})" if periodos else ""
     janela = sg.Window(f"Gráfico - {os.path.basename(arquivo)}{sufixo}", layout,
@@ -208,21 +203,20 @@ def abrir_janela_grafico(res):
     return janela
 
 
-def gravar_serie_diaria(arquivo):
-    """Grava a série diária (observado + previsão) da janela e avisa onde ficou."""
-    res = janelas_graficos[arquivo]["res"]
-    try:
-        caminho = os.path.abspath(itp.salvar_serie_diaria(res))
-    except Exception as erro:
-        traceback.print_exc()
-        sg.popup_error(f"Falha ao gravar a série diária:\n\n{erro}", font=FONTE_PADRAO)
-        return
-    diaria = res["diaria"]
-    previstos = int((~diaria["observado"]).sum())
-    sg.popup(f"Série diária gravada em:\n{caminho}\n\n"
-             f"{len(diaria)} dias ({len(diaria) - previstos} observados, "
-             f"{previstos} previstos)",
-             title="Série diária", font=FONTE_PADRAO)
+def gravar_csvs(res):
+    """
+    Grava o CSV diário de uma análise e devolve os caminhos (um por análise):
+      nascimentos -> nascimentos_diarios.csv (nascimentos por dia)
+      óbitos      -> taxa_obitos_diaria.csv  (Pi = óbitos por pessoa por dia)
+    Outras séries (ex.: saldo migratório) não gravam nada.
+    """
+    if res.get("tipo") == "mortalidade":
+        caminhos = [itp.salvar_taxa_obitos_diaria(res)]
+    elif itp.eh_arquivo_nascimentos(res["arquivo"]):
+        caminhos = [itp.salvar_nascimentos_diarios(res)]
+    else:
+        caminhos = []
+    return [os.path.abspath(c) for c in caminhos]
 
 
 def fechar_janela_grafico(arquivo):
@@ -247,21 +241,27 @@ def csvs_marcados(valores, arquivos):
 def gerar_graficos(janela, valores, arquivos):
     separador = ";"
     anos      = int(valores["-ANOS-"])
+    extrapolar = bool(valores["-HW-"])
     excluir   = itp.PERIODO_COVID if valores["-SEM-COVID-"] else None
 
     selecionados = csvs_marcados(valores, arquivos)
     diferencas   = [r for r in SERIES_DIFERENCA if valores.get(("-DIF-", r))]
-    mortalidade  = bool(valores.get("-MORT-"))
-    if not selecionados and not diferencas and not mortalidade:
+    if not selecionados and not diferencas:
         sg.popup("Marque ao menos um CSV ou série derivada para gerar gráficos.",
                  title="Nenhum arquivo selecionado", font=FONTE_PADRAO)
         return
 
     for arquivo in selecionados:
         try:
-            res = itp.analisar_csv(arquivo, separador=separador, anos_previsao=anos,
-                                   excluir_periodo=excluir)
-            abrir_janela_grafico(res)
+            # Óbitos: histopolação dos óbitos e da população IBGE e a taxa
+            # diária de mortalidade total do Brasil (Pi = óbitos/dia ÷ população)
+            if itp.eh_arquivo_obitos(arquivo):
+                res = itp.analisar_mortalidade(anos_previsao=anos, excluir_periodo=excluir,
+                                               arquivo_obitos=arquivo, extrapolar=extrapolar)
+            else:
+                res = itp.analisar_csv(arquivo, separador=separador, anos_previsao=anos,
+                                       excluir_periodo=excluir, extrapolar=extrapolar)
+            abrir_janela_grafico(res, gravados=gravar_csvs(res))
         except Exception as erro:
             traceback.print_exc()
             sg.popup_error(f"Falha ao processar '{arquivo}':\n\n{erro}", font=FONTE_PADRAO)
@@ -278,13 +278,6 @@ def gerar_graficos(janela, valores, arquivos):
             traceback.print_exc()
             sg.popup_error(f"Falha ao processar '{rotulo}':\n\n{erro}", font=FONTE_PADRAO)
 
-    if mortalidade:
-        try:
-            abrir_janela_grafico(itp.analisar_mortalidade(anos_previsao=anos, excluir_periodo=excluir))
-        except Exception as erro:
-            traceback.print_exc()
-            sg.popup_error(f"Falha ao calcular a taxa de mortalidade:\n\n{erro}", font=FONTE_PADRAO)
-
 
 def main():
     sg.theme(TEMA)
@@ -295,18 +288,16 @@ def main():
 
     while True:
         win, evento, valores = sg.read_all_windows()
-
         if win is None:  # nenhuma janela aberta
             break
 
+        # Sair (ou fechar a janela principal) encerra tudo, gráficos inclusive
         if evento in (sg.WIN_CLOSED, "Sair") and win is janela:
             break
 
-        # Eventos das janelas de gráfico
+        # Janelas de gráfico: fecham pelo X da própria janela
         if win is not janela:
-            if isinstance(evento, tuple) and evento[0] == "-SALVAR-":
-                gravar_serie_diaria(evento[1])
-            elif evento == sg.WIN_CLOSED or (isinstance(evento, tuple) and evento[0] == "-FECHAR-"):
+            if evento == sg.WIN_CLOSED:
                 alvo = next((a for a, d in janelas_graficos.items() if d["janela"] is win), None)
                 if alvo:
                     fechar_janela_grafico(alvo)
@@ -314,13 +305,17 @@ def main():
                     win.close()
             continue
 
-        if evento == "Marcar todos":
-            for arq in arquivos:
-                janela[("-CSV-", arq)].update(True)
+        if evento == "-HW-":
+            janela["-ANOS-"].update(disabled=not valores["-HW-"])
 
-        elif evento == "Limpar seleção":
+        elif evento in ("Marcar todos", "Limpar seleção"):
+            marcar = evento == "Marcar todos"
             for arq in arquivos:
-                janela[("-CSV-", arq)].update(False)
+                janela[("-CSV-", arq)].update(marcar)
+            for rotulo in SERIES_DIFERENCA:
+                caixa = janela[("-DIF-", rotulo)]
+                if not caixa.Disabled:   # saldo sem os CSVs de origem fica desmarcado
+                    caixa.update(marcar)
 
         elif evento == "Gerar gráficos":
             gerar_graficos(janela, valores, arquivos)

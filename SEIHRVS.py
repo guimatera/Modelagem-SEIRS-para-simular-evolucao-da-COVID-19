@@ -1,4 +1,14 @@
 import numpy as np
+from scipy.integrate import odeint
+
+# Integração dentro de cada passo dt:
+#   "LSODA" -> odeint (ODEPACK): passo adaptativo, troca sozinho entre Adams (não
+#              rígido) e BDF (rígido), com controle de erro por RTOL/ATOL
+#   "RK4"   -> Runge-Kutta clássico de 4ª ordem com passo fixo dt (versão anterior)
+# Nos dois, os fluxos atrasados e epsilon ficam constantes dentro do passo.
+METODO_INTEGRACAO = "LSODA"
+RTOL = 1.49012e-8   # tolerâncias padrão do odeint
+ATOL = 1.49012e-8
 
 # Mapeamento dos Índices no Vetor de Estado Etário
 # Grupos Etários: 0 -> 0-4a, 1 -> 5-29a, 2 -> 30-59a (60a+ alocados em R na condição inicial)
@@ -73,7 +83,13 @@ def condicao_inicial(faixas, E0, I0, H0, C0):
     return x0
 
 
-def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
+def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None, metodo=None, controle=None):
+    # controle: {"Kp": ..., "Kd": ...} liga o PD na força de infecção:
+    #   e = ICU - C,  u = sat_[0,1](-Kp*e - Kd*de/dt),  lambda = (1 - u)*beta*I/N
+    # u é calculado no início de cada passo e fica constante dentro dele
+    metodo = metodo or METODO_INTEGRACAO
+    if metodo not in ("LSODA", "RK4"):
+        raise ValueError(f"metodo de integracao invalido: '{metodo}'. Use 'LSODA' ou 'RK4'.")
     t = np.arange(t0, tf, dt)
     nt = t.size
     pi_taxa, Lambda = params["Pi"], params["Lambda"]
@@ -162,14 +178,14 @@ def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
         f["C_D"] = d * atrasado(ent_C, k, tau_CD, pre_C) * S_exp(tau_CD)
         return f
 
-    def derivadas(z, t_atual, f, eps_k, fim_semente):
+    def derivadas(z, t_atual, f, eps_k, fim_semente, u_k):
         x = z[:N_COMPARTIMENTOS]
         I = x[IDX_I]
         N_t = x[:N_VIVOS].sum()
 
         # Corte de transmissão: I < 1 não transmite, salvo na janela infecciosa de uma semente
         ativo = I >= 1.0 or t_atual <= fim_semente
-        lam = beta * I / N_t if ativo else 0.0
+        lam = (1.0 - u_k) * beta * I / N_t if ativo else 0.0
 
         S, S1, V = x[list(IDX_S)], x[list(IDX_S1)], x[list(IDX_V)]
         d1_g2 = v1[0] * S[1]
@@ -200,7 +216,7 @@ def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
         dz[IDX_D_NAT] = pi_taxa * N_t
         dz[IDX_D_DIS] = f["H_D"] + f["C_D"]
 
-        # Integrais do passo, gravadas nas séries depois do RK4
+        # Integrais do passo, gravadas nas séries depois da integração do passo
         dz[N_COMPARTIMENTOS] = ent_E_t
         dz[N_COMPARTIMENTOS + 1] = (1.0 - e1) * d1_g2
         dz[N_COMPARTIMENTOS + 2] = lam
@@ -210,6 +226,9 @@ def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
     x[:, 0] = x0
     rt = np.zeros(nt)
     icu = np.zeros(nt)
+    u = np.zeros(nt)
+    erro = np.zeros(nt)
+    derro = np.zeros(nt)
 
     # Sementes iniciais em E ou I transmitem até o fim da primeira janela infecciosa
     fim_semente = (t0 + tau_E + tau_IR) if (x0[IDX_E] + x0[IDX_I]) > 0 else t0 - 1.0
@@ -229,20 +248,31 @@ def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
             fim_semente = max(fim_semente, t[k] + tau_IR)
 
         f = fluxos_atrasados(k, xk, icu[k])
+        if controle is not None:
+            # Derivadas exatas no início do passo: dC/dt pelos fluxos e dICU/dt por dN/dt
+            dC = f["H_C"] - f["C_R"] - f["C_D"] - pi_taxa * xk[IDX_C]
+            dN = Lambda + epsilon[k] - pi_taxa * N_t - f["H_D"] - f["C_D"]
+            erro[k] = icu[k] - xk[IDX_C]
+            derro[k] = icu_10mil / 10000 * dN - dC
+            u[k] = min(max(-controle["Kp"] * erro[k] - controle["Kd"] * derro[k], 0.0), 1.0)
         ent_I[k] = f["E_I"] + epsilon[k]
         ent_H[k] = f["I_H"]
         ent_C[k] = f["H_C"]
         sem_leito[k] = f["sem_leito"]
         falha_g1[k] = (1.0 - e1) * f["d1_g1"]
 
-        # RK4: fluxos atrasados e epsilon ficam constantes dentro do passo
-        args = (f, epsilon[k], fim_semente)
+        # Fluxos atrasados e epsilon ficam constantes dentro do passo
+        args = (f, epsilon[k], fim_semente, u[k])
         z = np.concatenate([xk, np.zeros(3)])
-        k1 = dt * derivadas(z, t[k], *args)
-        k2 = dt * derivadas(z + k1 / 2, t[k] + dt / 2, *args)
-        k3 = dt * derivadas(z + k2 / 2, t[k] + dt / 2, *args)
-        k4 = dt * derivadas(z + k3, t[k] + dt, *args)
-        z_novo = z + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        if metodo == "LSODA":
+            z_novo = odeint(derivadas, z, [t[k], t[k] + dt], args=args,
+                            rtol=RTOL, atol=ATOL)[-1]
+        else:
+            k1 = dt * derivadas(z, t[k], *args)
+            k2 = dt * derivadas(z + k1 / 2, t[k] + dt / 2, *args)
+            k3 = dt * derivadas(z + k2 / 2, t[k] + dt / 2, *args)
+            k4 = dt * derivadas(z + k3, t[k] + dt, *args)
+            z_novo = z + (k1 + 2 * k2 + 2 * k3 + k4) / 6
 
         x[:, k + 1] = z_novo[:N_COMPARTIMENTOS]
         ent_E[k] = z_novo[N_COMPARTIMENTOS] / dt
@@ -251,7 +281,7 @@ def simular(x0, t0, tf, dt, params, epsilon=None, fluxos=None):
 
     # Entradas por dia em cada compartimento, para comparar com séries de eventos
     if fluxos is not None:
-        fluxos.update(ent_I=ent_I, ent_H=ent_H, ent_C=ent_C)
+        fluxos.update(ent_I=ent_I, ent_H=ent_H, ent_C=ent_C, u=u, erro=erro, derro=derro)
 
     return x, t, rt, icu
 
