@@ -59,15 +59,27 @@ def descrever_csv(arquivo, separador):
 
 
 def linhas_checkbox(arquivos, separador):
-    """Uma linha de checkbox por CSV encontrado no diretório de dados."""
+    """
+    Uma linha por CSV do diretório de dados: o checkbox do CSV e, à direita, o
+    da extrapolação por Holt-Winters daquela série.
+    """
     if not arquivos:
         return [[sg.Text(f"Nenhum CSV encontrado em:\n{itp.DIRETORIO_DADOS}",
                          text_color="firebrick")]]
-    return [
-        [sg.Checkbox(descrever_csv(arq, separador), default=(i == 0),
-                     key=("-CSV-", arq), font=(FONT_FAMILY, FONT_SIZE))]
-        for i, arq in enumerate(arquivos)
-    ]
+    linhas = []
+    for i, arq in enumerate(arquivos):
+        dica = ("Na taxa de mortalidade, extrapola óbitos E nascimentos juntos: a "
+                "população projetada é população + nascimentos − óbitos."
+                if itp.eh_arquivo_obitos(arq) else
+                "Extrapola esta série com Holt-Winters pelos anos de previsão.")
+        linhas.append([
+            sg.Checkbox(descrever_csv(arq, separador), default=(i == 0),
+                        key=("-CSV-", arq), font=(FONT_FAMILY, FONT_SIZE)),
+            sg.Push(),
+            sg.Checkbox("Extrapolar (Holt-Winters)", default=False,
+                        key=("-HW-", arq), tooltip=dica, font=(FONT_FAMILY, FONT_SIZE)),
+        ])
+    return linhas
 
 
 def linhas_diferenca():
@@ -94,14 +106,12 @@ def montar_janela_principal(arquivos, separador):
     coluna_csvs = sg.Column(
         linhas,
         scrollable=rolar, vertical_scroll_only=True,
-        size=(520, ALTURA_LINHA_CSV * LIMITE_ROLAGEM) if rolar else (None, None),
+        size=(700, ALTURA_LINHA_CSV * LIMITE_ROLAGEM) if rolar else (None, None),
         expand_x=True,
     )
 
     opcoes = [
-        [sg.Checkbox("Extrapolar com Holt-Winters", default=False, key="-HW-",
-                     enable_events=True)],
-        [sg.Text("Anos de previsão:", size=(18, 1)),
+        [sg.Text("Anos de previsão (séries com Holt-Winters):", size=(36, 1)),
          sg.Spin([i for i in range(1, 51)], initial_value=itp.QUANTIDADE_ANOS_PREVISAO,
                  key="-ANOS-", size=(5, 1))],
         [sg.Checkbox("Excluir o período da COVID-19",
@@ -241,7 +251,6 @@ def csvs_marcados(valores, arquivos):
 def gerar_graficos(janela, valores, arquivos):
     separador = ";"
     anos      = int(valores["-ANOS-"])
-    extrapolar = bool(valores["-HW-"])
     excluir   = itp.PERIODO_COVID if valores["-SEM-COVID-"] else None
 
     selecionados = csvs_marcados(valores, arquivos)
@@ -252,6 +261,7 @@ def gerar_graficos(janela, valores, arquivos):
         return
 
     for arquivo in selecionados:
+        extrapolar = bool(valores.get(("-HW-", arquivo)))   # Holt-Winters desta série
         try:
             # Óbitos: histopolação dos óbitos e da população IBGE e a taxa
             # diária de mortalidade total do Brasil (Pi = óbitos/dia ÷ população)
@@ -305,10 +315,7 @@ def main():
                     win.close()
             continue
 
-        if evento == "-HW-":
-            janela["-ANOS-"].update(disabled=not valores["-HW-"])
-
-        elif evento in ("Marcar todos", "Limpar seleção"):
+        if evento in ("Marcar todos", "Limpar seleção"):
             marcar = evento == "Marcar todos"
             for arq in arquivos:
                 janela[("-CSV-", arq)].update(marcar)
