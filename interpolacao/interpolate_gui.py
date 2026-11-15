@@ -68,15 +68,27 @@ def linhas_checkbox(arquivos, separador):
                          text_color="firebrick")]]
     linhas = []
     for i, arq in enumerate(arquivos):
-        dica = ("Na taxa de mortalidade, extrapola óbitos E nascimentos juntos: a "
-                "população projetada é população + nascimentos − óbitos."
-                if itp.eh_arquivo_obitos(arq) else
-                "Extrapola esta série com Holt-Winters pelos anos de previsão.")
+        importados = itp.eh_arquivo_importados(arq)
+        somente    = itp.eh_somente_histopolacao(arq) and not importados
+        if importados:
+            texto = "Projetar (Poisson + Monte Carlo)"
+            dica  = ("Observado: histopolação dos totais mensais do SINAN. Futuro: várias "
+                     "realizações de k ~ Poisson(λ/365) casos por dia (λ e nº de realizações "
+                     "nas Opções), com mediana e faixa de 5% a 95%. Igual ao SEIHRVS.")
+        elif somente:
+            texto, dica = "Somente histopolação", "Série só com histopolação: sem Holt-Winters."
+        elif itp.eh_arquivo_obitos(arq):
+            texto = "Extrapolar (Holt-Winters)"
+            dica  = ("Na taxa de mortalidade, extrapola óbitos E nascimentos juntos: a "
+                     "população projetada é população + nascimentos − óbitos.")
+        else:
+            texto = "Extrapolar (Holt-Winters)"
+            dica  = "Extrapola esta série com Holt-Winters pelos anos de previsão."
         linhas.append([
             sg.Checkbox(descrever_csv(arq, separador), default=(i == 0),
                         key=("-CSV-", arq), font=(FONT_FAMILY, FONT_SIZE)),
             sg.Push(),
-            sg.Checkbox("Extrapolar (Holt-Winters)", default=False,
+            sg.Checkbox(texto, default=False, disabled=somente,
                         key=("-HW-", arq), tooltip=dica, font=(FONT_FAMILY, FONT_SIZE)),
         ])
     return linhas
@@ -96,6 +108,30 @@ def linhas_diferenca():
     return linhas
 
 
+def linhas_importacao():
+    """
+    Opções da projeção dos casos importados (Poisson + Monte Carlo): cenário com
+    ou sem o surto de 2018-2020 (λ medido no SINAN, preenche o campo), λ em
+    casos/ano e nº de realizações do Monte Carlo.
+    """
+    global REFERENCIAS_IMPORTACAO
+    from SEIHRVS import N_MONTE_CARLO_PADRAO
+    REFERENCIAS_IMPORTACAO = itp.referencias_importacao()
+    padrao = next(iter(REFERENCIAS_IMPORTACAO))   # "Com surto"
+    return [
+        [sg.Text("Casos importados - cenário (SINAN):", size=(30, 1)),
+         sg.Combo(list(REFERENCIAS_IMPORTACAO), default_value=padrao, readonly=True,
+                  size=(45, 1), enable_events=True, key="-CENARIO-IMP-")],
+        [sg.Text("Casos importados por ano (λ):", size=(30, 1)),
+         sg.Input(f"{REFERENCIAS_IMPORTACAO[padrao]:.2f}", size=(10, 1), key="-LAMBDA-IMP-"),
+         sg.Text("Nº de realizações (Monte Carlo):"),
+         sg.Input(str(N_MONTE_CARLO_PADRAO), size=(6, 1), key="-N-MC-IMP-")],
+    ]
+
+
+REFERENCIAS_IMPORTACAO = {}
+
+
 def montar_janela_principal(arquivos, separador):
     # O saldo migratório entra na mesma lista dos CSVs, logo abaixo deles
     linhas = linhas_checkbox(arquivos, separador) + linhas_diferenca()
@@ -111,12 +147,14 @@ def montar_janela_principal(arquivos, separador):
     )
 
     opcoes = [
-        [sg.Text("Anos de previsão (séries com Holt-Winters):", size=(36, 1)),
+        [sg.Text("Anos de previsão (Holt-Winters e projeção dos importados):", size=(48, 1)),
          sg.Spin([i for i in range(1, 51)], initial_value=itp.QUANTIDADE_ANOS_PREVISAO,
                  key="-ANOS-", size=(5, 1))],
         [sg.Checkbox("Excluir o período da COVID-19",
                      default=False, key="-SEM-COVID-")]
     ]
+    if os.path.isfile(itp.ARQUIVO_IMPORTADOS):
+        opcoes += linhas_importacao()
 
     layout = [
         [sg.Text("Interpolação e Extrapolação de Séries Temporais",
@@ -142,7 +180,6 @@ class BarraFerramentas(NavigationToolbar2Tk):
 
 
 def _texto_ajuste(nome, r):
-    """'<nome>: R² Holt-Winters = 0,9501  |  RMSE = 6.789 nascimentos/mês'."""
     unidade = r["col_valor"].split(" no ")[0].lower()   # "Nascimentos no Brasil" -> "nascimentos"
     return (f"{nome}R² do Holt-Winters = {itp.formata_numero(r['r2_tendencia'], 4)}  |  "
             f"RMSE da série temporal = {itp.formata_numero(r['rmse_tendencia'])} {unidade}/mês")
@@ -157,6 +194,9 @@ def linhas_consideracoes(res):
     Na mortalidade aparecem os dois ajustes que a geram: óbitos e nascimentos.
     """
     negrito = (FONT_FAMILY, FONT_SIZE, "bold")
+    if res.get("monte_carlo_importados"):
+        return [[sg.Text(itp.descrever_monte_carlo_importados(res["monte_carlo_importados"]),
+                         font=negrito)]]
     if res.get("tipo") == "saldo":
         return [[sg.Text(f"Integral do saldo migratório: {itp.descrever_integral(res['integral'])}",
                          font=negrito)]]
@@ -218,12 +258,18 @@ def gravar_csvs(res):
     Grava o CSV diário de uma análise e devolve os caminhos (um por análise):
       nascimentos -> nascimentos_diarios.csv (nascimentos por dia)
       óbitos      -> taxa_obitos_diaria.csv  (Pi = óbitos por pessoa por dia)
+      importados  -> casos_importados_diarios.csv (casos importados por dia) e,
+                     com Monte Carlo, casos_importados_monte_carlo.csv
     Outras séries (ex.: saldo migratório) não gravam nada.
     """
     if res.get("tipo") == "mortalidade":
         caminhos = [itp.salvar_taxa_obitos_diaria(res)]
     elif itp.eh_arquivo_nascimentos(res["arquivo"]):
         caminhos = [itp.salvar_nascimentos_diarios(res)]
+    elif itp.eh_arquivo_importados(res["arquivo"]):
+        caminhos = [itp.salvar_importados_diarios(res)]
+        if res.get("monte_carlo_importados"):
+            caminhos.append(itp.salvar_monte_carlo_importados(res))
     else:
         caminhos = []
     return [os.path.abspath(c) for c in caminhos]
@@ -243,6 +289,28 @@ def fechar_todos_graficos():
 # =============================================================================
 # 3. LOOP PRINCIPAL
 # =============================================================================
+
+def ler_opcoes_importacao(valores):
+    """λ casos/ano das Opções; ValueError com mensagem clara se inválido."""
+    try:
+        lambda_ano = float(str(valores["-LAMBDA-IMP-"]).replace(",", "."))
+    except (ValueError, TypeError):
+        raise ValueError("Casos importados por ano (λ) deve ser um número.") from None
+    if lambda_ano < 0:
+        raise ValueError("Casos importados por ano (λ) não pode ser negativo.")
+    return lambda_ano
+
+
+def ler_n_monte_carlo(valores):
+    """Nº de realizações do Monte Carlo dos importados (inteiro ≥ 2)."""
+    try:
+        n = int(str(valores["-N-MC-IMP-"]).strip())
+    except (ValueError, TypeError):
+        n = 0
+    if n < 2:
+        raise ValueError("O nº de realizações do Monte Carlo deve ser um inteiro ≥ 2.")
+    return n
+
 
 def csvs_marcados(valores, arquivos):
     return [arq for arq in arquivos if valores.get(("-CSV-", arq))]
@@ -271,6 +339,11 @@ def gerar_graficos(janela, valores, arquivos):
             else:
                 res = itp.analisar_csv(arquivo, separador=separador, anos_previsao=anos,
                                        excluir_periodo=excluir, extrapolar=extrapolar)
+                # Casos importados: projeção por Poisson + Monte Carlo (λ e nº de
+                # realizações das Opções)
+                if itp.eh_arquivo_importados(arquivo) and extrapolar:
+                    res = itp.monte_carlo_importados(res, ler_opcoes_importacao(valores), anos,
+                                                     ler_n_monte_carlo(valores))
             abrir_janela_grafico(res, gravados=gravar_csvs(res))
         except Exception as erro:
             traceback.print_exc()
@@ -315,7 +388,13 @@ def main():
                     win.close()
             continue
 
-        if evento in ("Marcar todos", "Limpar seleção"):
+        if evento == "-CENARIO-IMP-":
+            # Grava direto na variável do campo: no PySimpleGUI 6.3, Input.update(valor)
+            # com o tema SystemDefault aplica a cor sentinela '1234567890' e o Tk falha
+            janela["-LAMBDA-IMP-"].TKStringVar.set(
+                f"{REFERENCIAS_IMPORTACAO[valores['-CENARIO-IMP-']]:.2f}")
+
+        elif evento in ("Marcar todos", "Limpar seleção"):
             marcar = evento == "Marcar todos"
             for arq in arquivos:
                 janela[("-CSV-", arq)].update(marcar)

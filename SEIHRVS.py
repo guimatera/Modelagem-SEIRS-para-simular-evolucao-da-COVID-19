@@ -51,7 +51,109 @@ def beta_de_R0(R0, params):
     return R0 / (np.exp(-pi_taxa * params["tau_E"]) * permanencia_I)
 
 
+# Importação de casos: processo de Poisson + Monte Carlo
+#   - cada realização sorteia k ~ Poisson(λ·Δt/365) casos importados por passo,
+#     independentes entre passos (lei dos eventos raros);
+#   - o Monte Carlo repete o sorteio N vezes e resume os casos importados
+#     (mediana e faixa P5-P95);
+#   - a simulação do modelo usa a REALIZAÇÃO MEDIANA: aquela cujo total de casos
+#     importados está mais perto da mediana dos totais (empate -> menor índice).
+# Hipótese declarada: chegadas independentes e uniformes no tempo. Nos dados do
+# SINAN (2007-2025) os casos vêm agrupados: o número de meses com caso por ano
+# tem variância 4,7x a média e 47% dos anos não tiveram importação.
+SEMENTE_DATAS = 0          # base do sorteio: a realização i usa default_rng([SEMENTE_DATAS, i])
+N_MONTE_CARLO_PADRAO = 200
+
+
+def sortear_epsilon_poisson(lambda_ano, nt, dt, rng):
+    """
+    Uma realização do processo de Poisson das importações: casos no passo k
+    ~ Poisson(lambda_ano * dt / 365), independentes entre passos. Devolve
+    epsilon em casos/dia (taxa no passo), como simular() espera: a quantidade
+    de casos do passo k é epsilon[k] * dt.
+    """
+    if lambda_ano < 0:
+        raise ValueError("A quantidade de casos importados por ano não pode ser negativa.")
+    return rng.poisson(lambda_ano * dt / 365.0, nt) / dt
+
+
+def realizacao(lambda_ano, nt, dt, i):
+    """Epsilon da realização nº i do Monte Carlo (sempre o mesmo sorteio)."""
+    return sortear_epsilon_poisson(lambda_ano, nt, dt, np.random.default_rng([SEMENTE_DATAS, i]))
+
+
+def monte_carlo(lambda_ano, t0, tf, dt, n_sim):
+    """
+    Monte Carlo dos casos importados: n_sim realizações independentes do
+    processo de Poisson. O mesmo (lambda_ano, horizonte, n_sim) dá sempre o
+    mesmo resultado.
+
+    Devolve dict com:
+      t              -> tempo (dias)
+      acumulados     -> casos importados acumulados até cada passo (realizações x passos)
+      totais         -> total de casos importados no período, um por realização
+      indice_mediana -> realização cujo total está mais perto da mediana dos totais
+      eps_mediana    -> epsilon dessa realização (entrada da simulação do modelo)
+      n_sim
+    """
+    if n_sim < 2:
+        raise ValueError("O Monte Carlo precisa de ao menos 2 realizações.")
+    t = np.arange(t0, tf, dt)
+    acumulados = np.empty((n_sim, t.size))
+    for i in range(n_sim):
+        acumulados[i] = np.cumsum(realizacao(lambda_ano, t.size, dt, i) * dt)
+    totais = acumulados[:, -1]
+    indice = int(np.argmin(np.abs(totais - np.median(totais))))   # empate -> menor índice
+    return {"t": t, "acumulados": acumulados, "totais": totais, "n_sim": n_sim,
+            "indice_mediana": indice, "eps_mediana": realizacao(lambda_ano, t.size, dt, indice)}
+
+
+def resumo_monte_carlo(mc):
+    """Linhas de texto: casos importados no período e a realização usada no modelo."""
+    totais = mc["totais"]
+    p5, p50, p95 = np.percentile(totais, [5, 50, 95])
+    mediana = f"{p50:.0f}" if p50 == int(p50) else f"{p50:.1f}"   # n par pode dar x,5
+    return [f"Monte Carlo: {mc['n_sim']} realizações da importação (Poisson)",
+            f"  Casos importados no período: mediana {mediana} [P5 {p5:.0f} - P95 {p95:.0f}], "
+            f"média {totais.mean():.1f}",
+            f"  Realização mediana (usada na simulação): "
+            f"{totais[mc['indice_mediana']]:.0f} casos"]
+
+
+def figura_monte_carlo(plt, mc, lambda_ano):
+    """Figura do Monte Carlo dos importados: acumulados (faixa, mediana e realização mediana) e histograma."""
+    fig, ax = plt.subplots(2, 1, figsize=(10, 8))
+    anos = mc["t"] / 365
+    p5, p50, p95 = np.percentile(mc["acumulados"], [5, 50, 95], axis=0)
+    ax[0].fill_between(anos, p5, p95, color='purple', alpha=0.2, label='P5-P95')
+    ax[0].plot(anos, p50, color='purple', label='Mediana (dia a dia)')
+    ax[0].plot(anos, mc["acumulados"][mc["indice_mediana"]], color='black', lw=1.2, linestyle='--',
+               label=f'Realização mediana ({mc["totais"][mc["indice_mediana"]]:.0f} casos, '
+                     'usada na simulação)')
+    ax[0].set_title(f'Casos importados acumulados - {mc["n_sim"]} realizações, '
+                    f'λ = {lambda_ano:.2f} casos/ano')
+    ax[0].set_xlabel('Tempo (anos)')
+    ax[0].set_ylabel('Casos importados acumulados')
+    ax[0].grid(True)
+    ax[0].legend(loc='upper left', fontsize=7)
+
+    totais = mc["totais"]
+    ax[1].hist(totais, bins=np.arange(totais.min(), totais.max() + 2) - 0.5,
+               color='gray', edgecolor='black')
+    for q, estilo in ((5, ':'), (50, '-'), (95, ':')):
+        ax[1].axvline(np.percentile(totais, q), color='purple', linestyle=estilo, label=f'P{q}')
+    ax[1].set_title('Distribuição do total de casos importados no período')
+    ax[1].set_xlabel('Casos importados no período')
+    ax[1].set_ylabel('Nº de realizações')
+    ax[1].grid(True)
+    ax[1].legend(loc='upper right', fontsize=7)
+    fig.subplots_adjust(hspace=0.4)
+    return fig
+
+
 def sortear_epsilon(mu_ano, tamanhos, nt, dt, rng):
+    # Modelo anterior (Poisson composto), mantido para parametros/estimar_controlador.py.
+    # A interface usa Poisson + Monte Carlo (monte_carlo / realizacao).
     # Eventos de importação: a cada ano, número de eventos ~ Poisson(mu_ano);
     # dia uniforme no ano e n_k sorteado de tamanhos
     eps = np.zeros(nt)
@@ -299,6 +401,20 @@ def main():
     fonte_titulo = (font_style, font_size + 2)
     sg.set_options(font=fonte)
 
+    # Cenários de λ medidos na série mensal de casos importados (interpolacao/);
+    # sem o arquivo, só o λ manual
+    referencias_imp = {}
+    try:
+        import os, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interpolacao'))
+        import interpolate as itp
+        referencias_imp = itp.referencias_importacao()
+    except Exception as erro:
+        print(f"Cenários de importação indisponíveis ({erro}); use o λ manual.")
+    # Padrão: com surto (período completo), mesma média de casos/ano do modelo
+    # anterior (MU_IMPORTACAO x tamanho médio dos eventos ~ 21 casos/ano)
+    cenario_padrao = next((r for r in referencias_imp if r.startswith('Com surto')), '')
+
     # Layout da Interface Gráfica
     left_col = [
         [sg.Text('Parâmetros Gerais e Demográficos:', font=fonte_titulo)],
@@ -312,9 +428,17 @@ def main():
         [sg.Slider(range=(0, 20), default_value=5, resolution=1, size=(45, 10), orientation='horizontal', key='-time-')],
         [sg.Text('Taxa de mortalidade natural (dias - π): '), sg.Slider(range=(0, 1e-4), default_value=2e-5, resolution=1e-5, size=(10, 10), orientation='horizontal', key='-mortalidadeNatural-')],
         [sg.Text('Importação de Casos (ε):', font=fonte_titulo)],
-        [sg.Text('Frequência de eventos μ (eventos/ano):')],
-        [sg.Slider(range=(0, 20), default_value=MU_IMPORTACAO, resolution=0.001, size=(45, 10), orientation='horizontal', key='-mu-')],
-        [sg.Text('Casos por evento (n_k): sorteados dos eventos do SINAN')],
+        [sg.Text('Cenário de referência (SINAN):')],
+        [sg.Combo(list(referencias_imp), default_value=cenario_padrao, readonly=True,
+                  size=(45, 1), enable_events=True, key='-cenario_imp-')],
+        [sg.Text('Casos importados por ano (λ):'),
+         sg.Input(f'{referencias_imp.get(cenario_padrao, 0.0):.2f}', size=(10, 1), key='-lambda_imp-')],
+        [sg.Text('Nº de realizações (Monte Carlo):'),
+         sg.Input(str(N_MONTE_CARLO_PADRAO), size=(6, 1), key='-n_mc-',
+                  tooltip='Cada realização sorteia k ~ Poisson(λ·Δt) casos importados por dia. '
+                          'O modelo é simulado com a realização mediana (total mais perto da '
+                          'mediana dos totais).')],
+        [sg.Text('Poisson + Monte Carlo; simulação com a realização mediana.')],
     ]
 
     middle_col = [
@@ -389,7 +513,21 @@ def main():
 
         if event == sg.WIN_CLOSED or event == 'Cancel':
             break
+        if event == '-cenario_imp-':
+            # Direto na variável do campo: Input.update(valor) do PySimpleGUI 6.3 falha
+            # com temas de cor "do sistema" (cor sentinela '1234567890')
+            window['-lambda_imp-'].TKStringVar.set(f"{referencias_imp[values['-cenario_imp-']]:.2f}")
+            continue
         if event == 'Ok':
+            try:
+                lambda_imp = float(str(values['-lambda_imp-']).replace(',', '.'))
+                n_mc = int(str(values['-n_mc-']).strip())
+                if lambda_imp < 0 or n_mc < 2:
+                    raise ValueError
+            except (ValueError, TypeError):
+                sg.popup_error('Casos importados por ano (λ) deve ser um número ≥ 0 e o nº de '
+                               'realizações do Monte Carlo, um inteiro ≥ 2.')
+                continue
             vacinacao_ativa = values['-vacinacao-'] == 'Yes'
 
             N = int(values['-popsize-'])
@@ -428,9 +566,9 @@ def main():
             x0 = condicao_inicial(faixas_de_N(N), float(values['-E_0-']), float(values['-I_0-']),
                                   float(values['-H0-']), float(values['-C0-']))
 
-            rng = np.random.default_rng()
-            nt = np.arange(t0, tf, dt).size
-            epsilon = sortear_epsilon(float(values['-mu-']), TAMANHOS_IMPORTACAO, nt, dt, rng)
+            # Importação: Poisson + Monte Carlo; o modelo usa a realização mediana
+            mc = monte_carlo(lambda_imp, t0, tf, dt, n_mc)
+            epsilon = mc["eps_mediana"]
 
             x, t, rt, icu = simular(x0, t0, tf, dt, params, epsilon)
 
@@ -438,7 +576,10 @@ def main():
             print("==================================================")
             print("Vacinação PNI Ativa: ", vacinacao_ativa)
             print(f"UTIs Disponíveis: {int(icu[0])}")
-            print('Casos importados: ', int(epsilon.sum() * dt))
+            print(f"Importação: k ~ Poisson(λ·Δt) por passo, λ = {lambda_imp:.2f} casos/ano, "
+                  f"Δt = {dt:g} dia")
+            for linha in resumo_monte_carlo(mc):
+                print(linha)
             print("==================================================")
             print('Óbitos totais: ', int(x[IDX_D_NAT, -1] + x[IDX_D_DIS, -1]))
             print('Óbitos por sarampo: ', int(x[IDX_D_DIS, -1]))
@@ -474,6 +615,7 @@ def main():
             ax[1].legend(loc='upper right', fontsize=7)
 
             plt.subplots_adjust(hspace=0.4)
+            figura_monte_carlo(plt, mc, lambda_imp)   # segunda janela: os casos importados
             plt.show()
 
     window.close()
