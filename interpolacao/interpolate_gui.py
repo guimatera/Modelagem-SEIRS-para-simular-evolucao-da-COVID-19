@@ -2,11 +2,12 @@ import os
 import sys
 import traceback
 import PySimpleGUI as sg
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import interpolate as itp
 
-# Permite rodar de qualquer diretorio: acha o interpolate.py ao lado (ou acima)
+from SEIHRVS import QUANTIL_PIOR_CASO
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+
 _AQUI = os.path.dirname(os.path.abspath(__file__))
 for _pasta in (_AQUI, os.path.dirname(_AQUI)):
     if _pasta not in sys.path:
@@ -71,10 +72,10 @@ def linhas_checkbox(arquivos, separador):
         importados = itp.eh_arquivo_importados(arq)
         somente    = itp.eh_somente_histopolacao(arq) and not importados
         if importados:
-            texto = "Projetar (Poisson + Monte Carlo)"
-            dica  = ("Observado: histopolação dos totais mensais do SINAN. Futuro: várias "
-                     "realizações de k ~ Poisson(λ/365) casos por dia (λ e nº de realizações "
-                     "nas Opções), com mediana e faixa de 5% a 95%. Igual ao SEIHRVS.")
+            texto = "Projetar (Poisson, pior caso)"
+            dica  = ("Observado: histopolação dos totais mensais do SINAN. Futuro: total de "
+                     "casos = quantil q de Poisson(λ·H/365) (λ e q nas Opções), a taxa "
+                     "constante. Igual ao SEIHRVS.")
         elif somente:
             texto, dica = "Somente histopolação", "Série só com histopolação: sem Holt-Winters."
         elif itp.eh_arquivo_obitos(arq):
@@ -110,12 +111,11 @@ def linhas_diferenca():
 
 def linhas_importacao():
     """
-    Opções da projeção dos casos importados (Poisson + Monte Carlo): cenário com
+    Opções da projeção dos casos importados (pior caso da Poisson): cenário com
     ou sem o surto de 2018-2020 (λ medido no SINAN, preenche o campo), λ em
-    casos/ano e nº de realizações do Monte Carlo.
+    casos/ano e quantil q do pior caso.
     """
     global REFERENCIAS_IMPORTACAO
-    from SEIHRVS import N_MONTE_CARLO_PADRAO
     REFERENCIAS_IMPORTACAO = itp.referencias_importacao()
     padrao = next(iter(REFERENCIAS_IMPORTACAO))   # "Com surto"
     return [
@@ -124,8 +124,8 @@ def linhas_importacao():
                   size=(45, 1), enable_events=True, key="-CENARIO-IMP-")],
         [sg.Text("Casos importados por ano (λ):", size=(30, 1)),
          sg.Input(f"{REFERENCIAS_IMPORTACAO[padrao]:.2f}", size=(10, 1), key="-LAMBDA-IMP-"),
-         sg.Text("Nº de realizações (Monte Carlo):"),
-         sg.Input(str(N_MONTE_CARLO_PADRAO), size=(6, 1), key="-N-MC-IMP-")],
+         sg.Text("Quantil do pior caso (0 a 1):"),
+         sg.Input(f"{QUANTIL_PIOR_CASO:g}", size=(6, 1), key="-QUANTIL-IMP-")],
     ]
 
 
@@ -194,8 +194,8 @@ def linhas_consideracoes(res):
     Na mortalidade aparecem os dois ajustes que a geram: óbitos e nascimentos.
     """
     negrito = (FONT_FAMILY, FONT_SIZE, "bold")
-    if res.get("monte_carlo_importados"):
-        return [[sg.Text(itp.descrever_monte_carlo_importados(res["monte_carlo_importados"]),
+    if res.get("pior_caso_importados"):
+        return [[sg.Text(itp.descrever_pior_caso_importados(res["pior_caso_importados"]),
                          font=negrito)]]
     if res.get("tipo") == "saldo":
         return [[sg.Text(f"Integral do saldo migratório: {itp.descrever_integral(res['integral'])}",
@@ -208,10 +208,9 @@ def linhas_consideracoes(res):
             for nome, r in ajustes if r.get("rmse_tendencia") is not None]
 
 
-def abrir_janela_grafico(res, gravados=()):
+def abrir_janela_grafico(res):
     """
     Cria (ou recria) a janela de gráfico de um CSV e desenha a análise nela.
-    `gravados`: caminhos dos CSVs já gravados para esta análise (mostrados na janela).
     """
     arquivo = res["arquivo"]
     fechar_janela_grafico(arquivo)
@@ -258,8 +257,8 @@ def gravar_csvs(res):
     Grava o CSV diário de uma análise e devolve os caminhos (um por análise):
       nascimentos -> nascimentos_diarios.csv (nascimentos por dia)
       óbitos      -> taxa_obitos_diaria.csv  (Pi = óbitos por pessoa por dia)
-      importados  -> casos_importados_diarios.csv (casos importados por dia) e,
-                     com Monte Carlo, casos_importados_monte_carlo.csv
+      importados  -> casos_importados_diarios.csv (casos importados por dia:
+                     observado + projeção do pior caso, se marcada)
     Outras séries (ex.: saldo migratório) não gravam nada.
     """
     if res.get("tipo") == "mortalidade":
@@ -268,8 +267,6 @@ def gravar_csvs(res):
         caminhos = [itp.salvar_nascimentos_diarios(res)]
     elif itp.eh_arquivo_importados(res["arquivo"]):
         caminhos = [itp.salvar_importados_diarios(res)]
-        if res.get("monte_carlo_importados"):
-            caminhos.append(itp.salvar_monte_carlo_importados(res))
     else:
         caminhos = []
     return [os.path.abspath(c) for c in caminhos]
@@ -301,22 +298,22 @@ def ler_opcoes_importacao(valores):
     return lambda_ano
 
 
-def ler_n_monte_carlo(valores):
-    """Nº de realizações do Monte Carlo dos importados (inteiro ≥ 2)."""
+def ler_quantil_pior_caso(valores):
+    """Quantil q do pior caso dos importados (0 < q < 1)."""
     try:
-        n = int(str(valores["-N-MC-IMP-"]).strip())
+        q = float(str(valores["-QUANTIL-IMP-"]).replace(",", "."))
     except (ValueError, TypeError):
-        n = 0
-    if n < 2:
-        raise ValueError("O nº de realizações do Monte Carlo deve ser um inteiro ≥ 2.")
-    return n
+        q = -1.0
+    if not 0 < q < 1:
+        raise ValueError("O quantil do pior caso deve ser um número entre 0 e 1 (exclusive).")
+    return q
 
 
 def csvs_marcados(valores, arquivos):
     return [arq for arq in arquivos if valores.get(("-CSV-", arq))]
 
 
-def gerar_graficos(janela, valores, arquivos):
+def gerar_graficos(valores, arquivos):
     separador = ";"
     anos      = int(valores["-ANOS-"])
     excluir   = itp.PERIODO_COVID if valores["-SEM-COVID-"] else None
@@ -339,12 +336,13 @@ def gerar_graficos(janela, valores, arquivos):
             else:
                 res = itp.analisar_csv(arquivo, separador=separador, anos_previsao=anos,
                                        excluir_periodo=excluir, extrapolar=extrapolar)
-                # Casos importados: projeção por Poisson + Monte Carlo (λ e nº de
-                # realizações das Opções)
+                # Casos importados: projeção pelo pior caso da Poisson (λ e
+                # quantil das Opções)
                 if itp.eh_arquivo_importados(arquivo) and extrapolar:
-                    res = itp.monte_carlo_importados(res, ler_opcoes_importacao(valores), anos,
-                                                     ler_n_monte_carlo(valores))
-            abrir_janela_grafico(res, gravados=gravar_csvs(res))
+                    res = itp.pior_caso_importados(res, ler_opcoes_importacao(valores), anos,
+                                                   ler_quantil_pior_caso(valores))
+            gravar_csvs(res)
+            abrir_janela_grafico(res)
         except Exception as erro:
             traceback.print_exc()
             sg.popup_error(f"Falha ao processar '{arquivo}':\n\n{erro}", font=FONTE_PADRAO)
@@ -404,7 +402,7 @@ def main():
                     caixa.update(marcar)
 
         elif evento == "Gerar gráficos":
-            gerar_graficos(janela, valores, arquivos)
+            gerar_graficos(valores, arquivos)
 
         elif evento == "Fechar gráficos":
             fechar_todos_graficos()

@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import fnmatch
 import calendar
@@ -18,6 +19,9 @@ from sklearn.metrics import r2_score
 from scipy.interpolate import PchipInterpolator
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from SEIHRVS import pior_caso_poisson, formata_quantil
+
 # =============================================================================
 # CONFIGURACOES - ajuste aqui para diferentes conjuntos de dados
 # =============================================================================
@@ -29,7 +33,6 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 # execucao), para o script e a interface funcionarem de qualquer lugar
 RAIZ             = os.path.dirname(os.path.abspath(__file__))
 DIRETORIO_DADOS  = os.path.join(RAIZ, "..", "dados", "series_mensais")                 # pasta varrida pela interface
-ARQUIVO_CSV      = os.path.join(DIRETORIO_DADOS, "nascimentos_mensais_brasil.csv")  # usado ao rodar como script
 SEPARADOR_CSV    = ";"                                               # separador do CSV
 DIRETORIO_SAIDA_DIARIA = os.path.join(RAIZ, "..", "dados", "resultados", "interpolacao")  # <nome>_diaria.csv
 
@@ -95,10 +98,7 @@ CSVS_SOMENTE_HISTOPOLACAO = ("casos_importados_*.csv",)
 # Casos importados de sarampo (SINAN/TABNET, país provável de infecção fora do
 # Brasil, classificação final = sarampo), por ano e mês de NOTIFICAÇÃO.
 #   - TABNET original (latin-1, tabela ano x mês) guardado em dados/sinan;
-#   - série mensal convertida (formato dos demais CSVs) em dados/series_mensais.
-# Gere de novo com `converter_tabnet_ano_mes` quando baixar uma versão nova.
-ARQUIVO_IMPORTADOS_TABNET = os.path.join(RAIZ, "..", "dados", "sinan",
-                                         "casos_importados_sarampo_tabnet_notificacao.csv")
+#   - série mensal (formato dos demais CSVs) em dados/series_mensais.
 ARQUIVO_IMPORTADOS        = os.path.join(DIRETORIO_DADOS,
                                          "casos_importados_sarampo_mensais_brasil.csv")
 
@@ -128,9 +128,6 @@ def eh_arquivo_importados(arquivo):
     """True se `arquivo` é o CSV de casos importados de sarampo."""
     return os.path.normcase(os.path.abspath(arquivo)) == os.path.normcase(os.path.abspath(ARQUIVO_IMPORTADOS))
 
-NOMES_MES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-             "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-
 def referencias_importacao(arquivo=ARQUIVO_IMPORTADOS, separador=SEPARADOR_CSV):
     """
     Dois cenários de referência para o λ (casos importados por ano), medidos
@@ -152,111 +149,50 @@ def referencias_importacao(arquivo=ARQUIVO_IMPORTADOS, separador=SEPARADOR_CSV):
         f"Sem surto 2018-2020 ({periodo})":  taxa((ano < 2018) | (ano > 2020)),
     }
 
-def monte_carlo_importados(res, lambda_ano, anos, n_sim):
+def pior_caso_importados(res, lambda_ano, anos, quantil):
     """
-    Projeção dos casos importados depois do último dia observado por Poisson +
-    Monte Carlo, com o mesmo Monte Carlo do SEIHRVS (`monte_carlo`: n_sim
-    realizações de k ~ Poisson(λ/365) casos por dia, sorteio da realização i
-    fixo; horizonte de anos x 365 dias). O observado continua sendo a
-    histopolação do SINAN.
+    Projeção dos casos importados depois do último dia observado pelo PIOR CASO
+    do processo de Poisson, o mesmo do SEIHRVS (`pior_caso_poisson`): total no
+    horizonte = quantil q de Poisson(λ·H/365), distribuído a taxa constante
+    (horizonte H = anos x 365 dias, passo de 1 dia). O observado continua
+    sendo a histopolação do SINAN.
 
     Devolve uma cópia de `res` com:
-      diaria                 -> observado + REALIZAÇÃO MEDIANA nos dias projetados
-                                (observado=False), a mesma que o SEIHRVS simula
-      monte_carlo_importados -> {lambda_ano, n_sim, dias (datas), media_diaria,
-                                 acumulado_p5/p50/p95, totais, indice_mediana,
-                                 acumulado_mediana}
+      diaria               -> observado + ε constante do pior caso nos dias
+                              projetados (observado=False), o mesmo do SEIHRVS
+      pior_caso_importados -> {lambda_ano, quantil, dias (datas), media, total,
+                               eps_diario, acumulado_media, acumulado_pior_caso}
     """
-    import sys
     raiz_projeto = os.path.abspath(os.path.join(RAIZ, ".."))
     if raiz_projeto not in sys.path:
         sys.path.insert(0, raiz_projeto)
-    from SEIHRVS import monte_carlo   # mesmo Monte Carlo da simulação do modelo
 
     n_dias = int(round(anos * 365))   # mesmo horizonte do SEIHRVS (365 x anos)
-    mc     = monte_carlo(float(lambda_ano), 0, n_dias, 1.0, int(n_sim))
+    pc     = pior_caso_poisson(float(lambda_ano), 0, n_dias, 1.0, float(quantil))
     d      = res["diaria"]
     inicio = d["dia"].iloc[-1] + datetime.timedelta(days=1)
     dias   = [inicio + datetime.timedelta(days=i) for i in range(n_dias)]
-    acum   = mc["acumulados"]
-    p5, p50, p95 = np.percentile(acum, [5, 50, 95], axis=0)
-    diario = np.diff(np.column_stack([np.zeros(len(acum)), acum]), axis=1)
-    futuro = pd.DataFrame({"dia": dias, "valor": mc["eps_mediana"], "observado": False})
+    fracao = np.arange(1, n_dias + 1) / n_dias
+    futuro = pd.DataFrame({"dia": dias, "valor": pc["eps"], "observado": False})
     return {**res,
             "diaria": pd.concat([d, futuro], ignore_index=True),
-            "monte_carlo_importados": {
-                "lambda_ano":        float(lambda_ano),
-                "n_sim":             mc["n_sim"],
-                "dias":              dias,
-                "media_diaria":      diario.mean(axis=0),
-                "acumulado_p5": p5, "acumulado_p50": p50, "acumulado_p95": p95,
-                "totais":            mc["totais"],
-                "indice_mediana":    mc["indice_mediana"],
-                "acumulado_mediana": acum[mc["indice_mediana"]],
+            "pior_caso_importados": {
+                "lambda_ano":          pc["lambda_ano"],
+                "quantil":             pc["quantil"],
+                "dias":                dias,
+                "media":               pc["media"],
+                "total":               pc["total"],
+                "eps_diario":          pc["eps"][0] if n_dias else 0.0,
+                "acumulado_media":     pc["media"] * fracao,
+                "acumulado_pior_caso": pc["total"] * fracao,
             }}
 
-def descrever_monte_carlo_importados(mc):
-    """'Monte Carlo (200 realizações, λ = 21,9/ano): 43 casos [P5 33 - P95 54], média 43,2 ...'."""
-    p5, p50, p95 = np.percentile(mc["totais"], [5, 50, 95])
-    return (f"Monte Carlo ({mc['n_sim']} realizações, λ = {formata_numero(mc['lambda_ano'], 2)} "
-            f"casos/ano, {mc['dias'][0]:%d/%m/%Y} a {mc['dias'][-1]:%d/%m/%Y}): casos importados "
-            f"no período = mediana {formata_numero(p50, 0 if p50 == int(p50) else 1)} "
-            f"[P5 {p5:.0f} - P95 {p95:.0f}], "
-            f"média {formata_numero(mc['totais'].mean(), 1)}  |  realização mediana "
-            f"({mc['totais'][mc['indice_mediana']]:.0f} casos) no CSV diário")
-
-def salvar_monte_carlo_importados(res, diretorio=DIRETORIO_SAIDA_DIARIA):
-    """
-    Grava o resumo diário do Monte Carlo dos importados em
-    'casos_importados_monte_carlo.csv' (separador ';'): dia; media_diaria
-    (média dos casos do dia entre as realizações); acumulado_p5;
-    acumulado_p50; acumulado_p95 (casos acumulados desde o início da projeção).
-    Com período excluído o nome ganha '_sem_covid' (ou '_com_exclusao').
-    """
-    mc = res["monte_carlo_importados"]
-    periodos = res.get("excluir_periodo") or []
-    sufixo   = ("" if not periodos else
-                "_sem_covid" if periodos == unir_periodos(PERIODO_COVID) else "_com_exclusao")
-    os.makedirs(diretorio, exist_ok=True)
-    caminho = os.path.join(diretorio, f"casos_importados_monte_carlo{sufixo}.csv")
-    pd.DataFrame({"dia": mc["dias"], "media_diaria": mc["media_diaria"],
-                  "acumulado_p5": mc["acumulado_p5"], "acumulado_p50": mc["acumulado_p50"],
-                  "acumulado_p95": mc["acumulado_p95"]}).to_csv(caminho, sep=SEPARADOR_CSV, index=False)
-    return caminho
-
-def converter_tabnet_ano_mes(entrada, saida, ultimo_mes,
-                             col_periodo="Mês/ano da notificação",
-                             col_valor="Casos importados de sarampo"):
-    """
-    Tabela do TABNET em ano x mês (linhas "2018";-;18;133;...;317) -> série
-    mensal no formato dos CSVs do projeto ("Janeiro/2007";0), em UTF-8.
-
-    - Os anos vêm da linha "Período:AAAA-AAAA" do cabeçalho; ano ausente da
-      tabela e célula "-" viram 0 (convenção do TABNET: sem notificação).
-    - `ultimo_mes` = (ano, mês) do último mês COMPLETO: os meses depois dele
-      ainda não foram (todos) notificados e ficam fora, em vez de entrar como 0.
-    Devolve o DataFrame gravado.
-    """
-    with open(entrada, encoding="latin-1") as f:
-        linhas = [l.strip() for l in f]
-    periodo = next(l for l in linhas if l.startswith("Período:"))
-    ano_ini, ano_fim = (int(a) for a in periodo.split(":")[1].split("-"))
-
-    tabela = {}
-    for l in linhas:
-        campos = [c.strip('"') for c in l.split(";")]
-        if len(campos) == 14 and campos[0].isdigit():
-            tabela[int(campos[0])] = [0 if c == "-" else int(c) for c in campos[1:13]]
-
-    fora = [a for a in tabela if not ano_ini <= a <= ano_fim]
-    if fora:
-        raise ValueError(f"Anos {fora} fora do período declarado {ano_ini}-{ano_fim}.")
-    registros = [(f"{NOMES_MES[m - 1]}/{a}", tabela.get(a, [0] * 12)[m - 1])
-                 for a in range(ano_ini, ano_fim + 1) for m in range(1, 13)
-                 if (a, m) <= tuple(ultimo_mes)]
-    df = pd.DataFrame(registros, columns=[col_periodo, col_valor])
-    df.to_csv(saida, sep=SEPARADOR_CSV, index=False, encoding="utf-8", quoting=2)  # 2 = QUOTE_NONNUMERIC
-    return df
+def descrever_pior_caso_importados(pc):
+    return (f"Pior caso {formata_quantil(pc['quantil'])} da Poisson (λ = "
+            f"{formata_numero(pc['lambda_ano'], 2)} casos/ano, {pc['dias'][0]:%d/%m/%Y} a "
+            f"{pc['dias'][-1]:%d/%m/%Y}): {formata_numero(pc['total'], 0)} casos importados no "
+            f"período (média {formata_numero(pc['media'], 1)})  |  taxa constante de "
+            f"{formata_numero(pc['eps_diario'], 4)} casos/dia no CSV diário")
 
 def unir_periodos(periodos):
     """
@@ -1193,8 +1129,8 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
         return montar_figura_mortalidade(res, fig=fig, titulo=titulo, figsize=figsize)
     if res.get("tipo") == "saldo":
         return montar_figura_saldo(res, fig=fig, titulo=titulo, figsize=figsize)
-    if res.get("monte_carlo_importados"):
-        return montar_figura_importados_mc(res, fig=fig, titulo=titulo, figsize=figsize)
+    if res.get("pior_caso_importados"):
+        return montar_figura_importados_pior_caso(res, fig=fig, titulo=titulo, figsize=figsize)
     ano_base = res["ano_base"]
 
     if fig is None:
@@ -1397,12 +1333,12 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
     cursor.connect("add", _tooltip_mortalidade)
     return fig, eixos, cursor
 
-def montar_figura_importados_mc(res, fig=None, titulo=None, figsize=(14, 8)):
+def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 8)):
     """
-    Casos importados com Monte Carlo, em dois painéis:
+    Casos importados com o pior caso da Poisson, em dois painéis:
       (1) observado: histopolação diária do SINAN e média diária de cada mês;
       (2) projeção: casos importados acumulados desde o fim do observado,
-          mediana e faixa P5-P95 entre as realizações do Monte Carlo.
+          média (λ·t) e pior caso (quantil) a taxa constante.
     Retorna (fig, eixos, cursor), como `montar_figura`.
     """
     if fig is None:
@@ -1410,7 +1346,7 @@ def montar_figura_importados_mc(res, fig=None, titulo=None, figsize=(14, 8)):
     else:
         fig.clear()
     eixos = fig.subplots(2, 1)
-    mc = res["monte_carlo_importados"]
+    pc = res["pior_caso_importados"]
 
     d = res["diaria"][res["diaria"]["observado"]].copy()   # só o observado (SINAN)
     d.index = pd.to_datetime(d.pop("dia"))
@@ -1432,17 +1368,16 @@ def montar_figura_importados_mc(res, fig=None, titulo=None, figsize=(14, 8)):
     ax.grid(True, linestyle="--", alpha=0.5)
 
     ax = eixos[1]
-    dias = pd.to_datetime(mc["dias"])
-    ax.fill_between(dias, mc["acumulado_p5"], mc["acumulado_p95"], color="purple", alpha=0.2,
-                    label="P5-P95")
-    linha, = ax.plot(dias, mc["acumulado_p50"], color="purple", lw=1.5, label="Mediana (dia a dia)")
-    linha.rotulo_tooltip = ("Acumulado (mediana)", 1.0, 0, False)
-    linha, = ax.plot(dias, mc["acumulado_mediana"], color="black", lw=1.2, linestyle="--",
-                     label=f"Realização mediana ({mc['totais'][mc['indice_mediana']]:.0f} casos; "
-                           f"CSV diário e SEIHRVS)")
-    linha.rotulo_tooltip = ("Acumulado (realização mediana)", 1.0, 0, False)
-    ax.set_title(f"Projeção Monte Carlo: casos importados acumulados ({mc['n_sim']} realizações, "
-                 f"λ = {formata_numero(mc['lambda_ano'], 2)} casos/ano)", fontsize=11)
+    dias = pd.to_datetime(pc["dias"])
+    linha, = ax.plot(dias, pc["acumulado_media"], color="purple", lw=1.5,
+                     label=f"Média λ·t ({formata_numero(pc['media'], 1)} casos)")
+    linha.rotulo_tooltip = ("Acumulado (média)", 1.0, 1, False)
+    linha, = ax.plot(dias, pc["acumulado_pior_caso"], color="black", lw=1.2, linestyle="--",
+                     label=f"Pior caso {formata_quantil(pc['quantil'])} a taxa constante "
+                           f"({formata_numero(pc['total'], 0)} casos; CSV diário e SEIHRVS)")
+    linha.rotulo_tooltip = ("Acumulado (pior caso)", 1.0, 1, False)
+    ax.set_title(f"Projeção pelo pior caso da Poisson: casos importados acumulados "
+                 f"(λ = {formata_numero(pc['lambda_ano'], 2)} casos/ano)", fontsize=11)
     ax.set_ylabel("Casos importados acumulados")
     ax.set_xlabel("Data")
     ax.legend(loc="upper left", fontsize=8)
@@ -1568,8 +1503,9 @@ def salvar_importados_diarios(res, diretorio=DIRETORIO_SAIDA_DIARIA):
     """
     Casos importados de sarampo por dia (entrada diária do modelo), histopolados
     a partir dos totais mensais, em 'casos_importados_diarios.csv' (separador
-    ';'): dia; casos_importados (casos/dia, soma do mês = total notificado);
-    tipo. Com período excluído o nome ganha '_sem_covid' (ou '_com_exclusao').
+    ';'): dia; casos_importados (casos/dia); tipo. 'observado' = histopolação
+    do SINAN (soma do mês = total notificado); 'previsto' = pior caso da
+    Poisson a taxa constante (pior_caso_importados), o ε do SEIHRVS. Com período excluído o nome ganha '_sem_covid' (ou '_com_exclusao').
     Devolve o caminho.
     """
     d = res["diaria"]
