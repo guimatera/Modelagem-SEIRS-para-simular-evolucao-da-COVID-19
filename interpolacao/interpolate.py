@@ -16,7 +16,7 @@ import matplotlib.dates as mdates
 import pandas as pd
 import mplcursors
 from sklearn.metrics import r2_score
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import PPoly
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -26,7 +26,7 @@ from SEIHRVS import pior_caso_poisson, formata_quantil
 # CONFIGURACOES - ajuste aqui para diferentes conjuntos de dados
 # =============================================================================
 # Sao dois metodos, um para cada metade do trabalho:
-#   INTERPOLACAO  -> Histospline (PCHIP sobre o acumulado), conserva os totais mensais
+#   INTERPOLACAO  -> linear do acumulado (total do mes dividido igualmente entre os dias)
 #   EXTRAPOLACAO  -> Holt-Winters (suavizacao exponencial tripla)
 
 # Caminhos resolvidos a partir da pasta deste arquivo (e nao do diretorio de
@@ -89,11 +89,11 @@ EXCLUIR_PERIODO_PADRAO  = None  # ou PERIODO_COVID, para o script já rodar sem 
 #     em interpolate_gui.py), que continua lendo os dois arquivos.
 CSVS_IGNORADOS = ("doses_*.csv", "emigracao_*.csv", "imigracao_*.csv")
 
-# CSVs que entram SÓ com histopolação (taxa diária que conserva o total de cada
-# mês): sem Holt-Winters e sem preenchimento da lacuna do período excluído.
+# CSVs que entram SÓ com a interpolação (total do mês dividido entre os dias):
+# sem Holt-Winters e sem preenchimento da lacuna do período excluído.
 # Casos importados de sarampo são contagens raras e em surtos (zeros na maior
 # parte dos meses), sem a sazonalidade regular que o Holt-Winters supõe.
-CSVS_SOMENTE_HISTOPOLACAO = ("casos_importados_*.csv",)
+CSVS_SEM_HOLT_WINTERS = ("casos_importados_*.csv",)
 
 # Casos importados de sarampo (SINAN/TABNET, país provável de infecção fora do
 # Brasil, classificação final = sarampo), por ano e mês de NOTIFICAÇÃO.
@@ -120,9 +120,9 @@ def eh_arquivo_obitos(arquivo):
     """True se `arquivo` é o CSV de óbitos (vira a taxa diária de mortalidade)."""
     return os.path.normcase(os.path.abspath(arquivo)) == os.path.normcase(os.path.abspath(ARQUIVO_OBITOS))
 
-def eh_somente_histopolacao(arquivo):
-    """True se o CSV entra só com histopolação (padrões de `CSVS_SOMENTE_HISTOPOLACAO`)."""
-    return any(fnmatch.fnmatch(os.path.basename(arquivo), p) for p in CSVS_SOMENTE_HISTOPOLACAO)
+def eh_sem_holt_winters(arquivo):
+    """True se o CSV entra só com a interpolação, sem Holt-Winters (`CSVS_SEM_HOLT_WINTERS`)."""
+    return any(fnmatch.fnmatch(os.path.basename(arquivo), p) for p in CSVS_SEM_HOLT_WINTERS)
 
 def eh_arquivo_importados(arquivo):
     """True se `arquivo` é o CSV de casos importados de sarampo."""
@@ -155,7 +155,7 @@ def pior_caso_importados(res, lambda_ano, anos, quantil):
     do processo de Poisson, o mesmo do SEIHRVS (`pior_caso_poisson`): total no
     horizonte = quantil q de Poisson(λ·H/365), distribuído a taxa constante
     (horizonte H = anos x 365 dias, passo de 1 dia). O observado continua
-    sendo a histopolação do SINAN.
+    sendo a interpolação dos totais mensais do SINAN.
 
     Devolve uma cópia de `res` com:
       diaria               -> observado + ε constante do pior caso nos dias
@@ -264,15 +264,18 @@ def carregar_dados_mensais(arquivo, separador, col_periodo, col_valor):
 
 
 # =============================================================================
-# 2. INTERPOLACAO - HISTOSPLINE (CONSERVA OS TOTAIS MENSAIS)
+# 2. INTERPOLACAO LINEAR DO ACUMULADO (CONSERVA OS TOTAIS MENSAIS)
 # =============================================================================
-# Cada ponto e o TOTAL de um mes, e nao o valor da serie num instante. Uma spline
-# que passa pelos pontos (no meio do mes) nao devolve esses totais quando
-# integrada. Aqui se interpola o ACUMULADO A(x), conhecido exatamente nas bordas
-# dos meses, e a curva e a derivada A'(x): a integral de cada mes e, por
-# construcao, A(fim) - A(inicio) = total do mes (Boneva, Kendall & Stefanov,
-# 1971). Com PCHIP o acumulado e monotono em cada mes, entao a curva tem o sinal
-# do total do mes (nunca negativa numa serie de contagens).
+# Cada ponto e o TOTAL de um mes, e nao o valor da serie num instante.
+# Interpolacao em linha reta (recomendacao do orientador): o acumulado A(t) e
+# ligado por retas entre as bordas dos meses, ou seja, o total de cada mes e
+# dividido IGUALMENTE entre os dias daquele mes (valor diario = total / dias do
+# mes). Restricoes atendidas por construcao:
+#   1. integral de cada mes = total do mes (A(fim) - A(inicio));
+#   2. valores nos nos iguais: A(borda) = acumulado exato dos meses;
+#   3. nao negatividade: valor diario = total / dias >= 0.
+# Consequencia (hipotese declarada): o valor diario e constante dentro do mes e
+# muda em degrau na virada do mes; a forma dentro do mes nao vem dos dados.
 #
 # O acumulado e montado sobre DIAS de calendario (fevereiro tem 28 ou 29), entao
 # a curva e uma TAXA DIARIA (unidades/dia) e o mes curto deixa de aparecer como
@@ -303,19 +306,27 @@ def _dia_para_ano(dia):
     dias = np.where([calendar.isleap(a) for a in ano.ravel()], 366, 365).reshape(dia.shape)
     return ano + (dia - jan1) / dias
 
-def histopolar(bordas_dias, totais):
+def interpolar_acumulado(bordas_dias, totais):
     """
-    Histopolação genérica: `totais[i]` é o total do intervalo
-    [bordas_dias[i], bordas_dias[i+1]) (dias ordinais, intervalos encostados).
-    Devolve o acumulado A(dia) (PCHIP); a taxa diária é A'(dia) e o total de
-    um dia d é A(d+1) - A(d). Serve para meses (Histospline) ou anos.
-    """
-    return PchipInterpolator(np.asarray(bordas_dias, dtype=float),
-                             np.concatenate([[0.0], np.cumsum(np.asarray(totais, dtype=float))]))
+    Interpolação linear do acumulado: `totais[i]` é o total do intervalo
+    [bordas_dias[i], bordas_dias[i+1]) (dias ordinais, intervalos encostados),
+    dividido igualmente entre os dias do intervalo.
 
-class Histospline:
+    Devolve o acumulado A(dia) (PPoly de grau 1 que passa por (bordas,
+    acumulado), A(bordas[0]) = 0); a taxa é A.derivative() (total / dias, constante
+    no intervalo) e o total de um dia d é A(d+1) - A(d). Serve para meses ou anos.
     """
-    Curva que conserva os totais mensais. x em anos fracionários normalizados
+    b = np.asarray(bordas_dias, dtype=float)
+    y = np.asarray(totais, dtype=float)
+    if np.any(y < 0):
+        raise ValueError("A interpolação exige totais não negativos (valor diário >= 0).")
+    acumulado = np.concatenate([[0.0], np.cumsum(y)])
+    return PPoly(np.vstack([y / np.diff(b), acumulado[:-1]]), b)
+
+class InterpolacaoMensal:
+    """
+    Taxa diária com o total de cada mês dividido igualmente entre os dias do
+    mês (`interpolar_acumulado`). x em anos fracionários normalizados
     (x_absoluto - ano_base), com os pontos no meio do mês como em
     `carregar_dados_mensais`; y são os totais.
 
@@ -337,9 +348,10 @@ class Histospline:
         self.ano_base      = ano_base
         self.fim_observado = _inicio_do_mes(ultimo + 1) - ano_base
 
-        # Por dentro tudo em dias ordinais: o acumulado A(dia) e a PCHIP, e a
-        # taxa diaria e A'(dia). As bordas em x (anos) ficam para o grafico.
-        self.trechos = []   # (x_inicio, x_fim, acumulado PCHIP em dias)
+        # Por dentro tudo em dias ordinais: o acumulado A(dia) e linear por partes
+        # entre as bordas dos meses e a taxa diaria A'(dia) = total do mes / dias.
+        # As bordas em x (anos) ficam para o grafico.
+        self.trechos = []   # (x_inicio, x_fim, acumulado A(dia) em dias)
         self.meses   = []   # (x_inicio, x_fim, total do mes)
         self.dia_fim_observado = int(round(float(_ano_para_dia(self.fim_observado + ano_base))))
         cortes = np.flatnonzero(np.diff(idx) != 1) + 1
@@ -348,7 +360,7 @@ class Histospline:
                                for k in range(i_seg[0], i_seg[-1] + 2)])
             dias = np.array([datetime.date(k // 12, k % 12 + 1, 1).toordinal()
                              for k in range(i_seg[0], i_seg[-1] + 2)], dtype=float)
-            acumulado = histopolar(dias, y_seg)
+            acumulado = interpolar_acumulado(dias, y_seg)
             self.trechos.append((float(bordas[0]), float(bordas[-1]), acumulado))
             self.meses += list(zip(bordas[:-1], bordas[1:], y_seg))
 
@@ -580,13 +592,13 @@ def analisar_csv(arquivo,
                  excluir_periodo=EXCLUIR_PERIODO_PADRAO,
                  extrapolar=True):
     """
-    Interpolação por histopolação (histospline: conserva o total de cada mês e
-    estima a taxa diária) e, se `extrapolar`, extrapolação por Holt-Winters.
+    Interpolação linear do acumulado (total de cada mês dividido igualmente
+    entre os dias) e, se `extrapolar`, extrapolação por Holt-Winters.
     Retorna um dicionário com os dados, os modelos e as métricas do arquivo.
     excluir_periodo: None, um (ini, fim) ou uma lista deles.
-    CSVs de `CSVS_SOMENTE_HISTOPOLACAO` ignoram `extrapolar` (só histopolação).
+    CSVs de `CSVS_SEM_HOLT_WINTERS` ignoram `extrapolar` (só a interpolação).
     """
-    somente = eh_somente_histopolacao(arquivo)
+    somente = eh_sem_holt_winters(arquivo)
     col_periodo, col_valor = ler_colunas(arquivo, separador)
     x_mensal, y_mensal = carregar_dados_mensais(arquivo, separador, col_periodo, col_valor)
     return analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
@@ -599,17 +611,17 @@ def analisar_diferenca(arquivo_a, arquivo_b,
                        excluir_periodo=EXCLUIR_PERIODO_PADRAO,
                        nome=None):
     """
-    Saldo A - B (ex.: emigração - imigração) a partir das séries HISTOPOLADAS.
+    Saldo A - B (ex.: emigração - imigração) a partir das séries INTERPOLADAS.
 
-    Cada CSV é histopolado separadamente (histospline, sem extrapolação): sai a
+    Cada CSV é interpolado separadamente (sem extrapolação): sai a
     taxa diária de A e a de B, cada uma conservando os totais mensais do seu
     CSV. O saldo diário é a diferença das duas, só nos dias cobertos por ambas,
     e res["integral"] é a integral desse saldo (∫ (a - b) dt, t em dias).
 
     Como cada valor diário é A(d+1) - A(d) do acumulado, a soma dos dias é a
-    integral exata da curva; e como as duas histosplines conservam o total de
+    integral exata da curva; e como as duas interpolações conservam o total de
     cada mês, essa integral é igual à soma dos saldos mensais (vai junto como
-    conferência). A histopolação muda a forma diária dentro do mês, não o total.
+    conferência).
     """
     res_a = analisar_csv(arquivo_a, separador=separador,
                          excluir_periodo=excluir_periodo, extrapolar=False)
@@ -694,7 +706,7 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
                    extrapolar=True, preencher_lacuna=True):
     """Núcleo de analisar_csv: recebe a série mensal (x em ano fracionário, y)."""
     # Descarta os períodos excluídos (ex.: choque da COVID-19, picos de surto). Os
-    # pontos saem da spline e do ajuste, mas continuam guardados para o gráfico.
+    # pontos saem da interpolação e do ajuste, mas continuam guardados para o gráfico.
     periodos   = unir_periodos(excluir_periodo)
     x_excluido = y_excluido = np.array([])
     if periodos:
@@ -711,12 +723,12 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
     x        = x_mensal[ordem] - ano_base
     y        = y_mensal[ordem]
 
-    # --- Interpolacao: histospline, conserva o total de cada mes -------------
-    spline = Histospline(x, y, ano_base)
+    # --- Interpolacao linear do acumulado, conserva o total de cada mes ------
+    interpolacao = InterpolacaoMensal(x, y, ano_base)
 
     # Preenchimento da lacuna do periodo excluido (reta global x sazonal, o mesmo
     # que o Holt-Winters usa em _completar_serie_mensal), so para exibir: os meses
-    # reconstruidos nao entram na histospline nem nas metricas.
+    # reconstruidos nao entram na interpolacao nem nas metricas.
     x_rec = y_rec = np.array([])
     if periodos and preencher_lacuna:
         mult = SAZONALIDADE_HW == "multiplicativa" and float(np.min(y)) > 0
@@ -737,9 +749,9 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
         "ano_base":          ano_base,
         "x":                 x,
         "y":                 y,
-        "spline":            spline,
-        "erro_conservacao":  spline.erro_conservacao(),   # ~0: confere a construcao
-        "diaria":            spline.diario(),             # dia, valor, observado
+        "interpolacao":      interpolacao,
+        "erro_conservacao":  interpolacao.erro_conservacao(),   # ~0: confere a construcao
+        "diaria":            interpolacao.diario(),             # dia, valor, observado
         "x_reconstruido":    x_rec,   # meses preenchidos na lacuna (ano absoluto)
         "y_reconstruido":    y_rec,   # totais mensais preenchidos
     }
@@ -806,19 +818,19 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
         )
 
     # Ordem: Holt-Winters sobre os totais mensais REAIS (acima) e so depois a
-    # desagregacao pela histospline, do passado e da projecao juntos. O
-    # contrario (rodar o Holt-Winters sobre dias inventados) poria no modelo a
-    # forma intra-mes suposta pela histospline, que nao vem dos dados.
-    estimativa = modelo_tendencia(x_futuros)
-    spline     = Histospline(np.concatenate([x, x_futuros]),
-                             np.concatenate([y, estimativa]),
-                             ano_base, x_ultimo_observado=x[-1])
+    # desagregacao por dia, do passado e da projecao juntos. O contrario (rodar
+    # o Holt-Winters sobre dias inventados) poria no modelo a forma intra-mes
+    # suposta pela interpolacao, que nao vem dos dados.
+    estimativa   = modelo_tendencia(x_futuros)
+    interpolacao = InterpolacaoMensal(np.concatenate([x, x_futuros]),
+                                      np.concatenate([y, estimativa]),
+                                      ano_base, x_ultimo_observado=x[-1])
 
     return {
         **base,
-        "spline":            spline,
-        "erro_conservacao":  spline.erro_conservacao(),
-        "diaria":            spline.diario(),   # observado + previsao, por dia
+        "interpolacao":      interpolacao,
+        "erro_conservacao":  interpolacao.erro_conservacao(),
+        "diaria":            interpolacao.diario(),   # observado + previsao, por dia
         "rotulo_modelo":     rotulo,
         "descricao_modelo":  descricao,
         "r2_tendencia":      r2_tend,
@@ -832,11 +844,11 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
 # --- Taxa diaria de mortalidade ---------------------------------------------
 # Pi(dia) = obitos(dia) / populacao(dia), em obitos por pessoa por dia (unidade
 # do Pi do SEIHRVS), sobre a populacao brasileira inteira.
-#   Obitos e nascimentos: histopolacao diaria dos totais mensais (analisar_csv)
+#   Obitos e nascimentos: total mensal dividido entre os dias (analisar_csv)
 #     e, se a extrapolacao estiver ligada, Holt-Winters nos totais mensais de
 #     cada serie, desagregado por dia do mesmo jeito.
-#   Populacao no periodo OBSERVADO: populacao anual total do IBGE histopolada
-#     para dias (populacao_diaria).
+#   Populacao no periodo OBSERVADO: populacao anual total do IBGE, constante
+#     em todos os dias do ano (populacao_diaria).
 #   Populacao no periodo PROJETADO: parte do valor diario do IBGE no ultimo dia
 #     observado e avanca pelo balanco P(d+1) = P(d) + nascimentos(d) - obitos(d),
 #     com nascimentos e obitos diarios do Holt-Winters.
@@ -847,8 +859,9 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
 #     todas as idades e compartimentos, como no modelo;
 #   - a projecao da populacao e FECHADA: so nascimentos - obitos, sem o saldo
 #     migratorio;
-#   - a forma dentro do mes (obitos, nascimentos) e do ano (populacao) vem so da
-#     suavidade da PCHIP no acumulado.
+#   - obitos e nascimentos sao constantes dentro do mes, e a populacao dentro do
+#     ano (interpolacao linear do acumulado): a forma intra-mes/ano nao vem dos
+#     dados.
 
 def ler_populacao_anual(arquivo=ARQUIVO_POPULACAO, linha=LINHA_POPULACAO):
     """CSV do Tabnet/IBGE (latin-1, ';', cabeçalho na 4ª linha) -> Series ano -> população."""
@@ -862,16 +875,16 @@ def ler_populacao_anual(arquivo=ARQUIVO_POPULACAO, linha=LINHA_POPULACAO):
 
 def populacao_diaria(pop_anual):
     """
-    Histopolação anual -> diária: cada ano entra com população x dias do ano
-    (pessoa-dia), e o valor de um dia é A(d+1) - A(d), a população média
-    daquele dia. Devolve Series indexada pela data.
+    Anual -> diária pela interpolação linear do acumulado: cada ano entra com
+    população x dias do ano (pessoa-dia), dividida igualmente entre os dias,
+    então o valor de um dia é a população do ano. Devolve Series indexada pela data.
     """
     anos = pop_anual.index.to_numpy()
     if not np.all(np.diff(anos) == 1):
         raise ValueError("A projeção anual precisa de anos consecutivos.")
     bordas = np.array([datetime.date(int(a), 1, 1).toordinal() for a in np.append(anos, anos[-1] + 1)],
                       dtype=float)
-    acumulado = histopolar(bordas, pop_anual.to_numpy() * np.diff(bordas))
+    acumulado = interpolar_acumulado(bordas, pop_anual.to_numpy() * np.diff(bordas))
     dias = np.arange(bordas[0], bordas[-1])
     return pd.Series(acumulado(dias + 1) - acumulado(dias),
                      index=pd.to_datetime([datetime.date.fromordinal(int(d)) for d in dias]),
@@ -885,7 +898,7 @@ def analisar_mortalidade(anos_previsao=QUANTIDADE_ANOS_PREVISAO,
                          arquivo_nascimentos=ARQUIVO_NASCIMENTOS):
     """
     Taxa diária de mortalidade Pi = óbitos / população (por pessoa por dia).
-    Devolve o resultado da análise dos óbitos (histospline e, se `extrapolar`,
+    Devolve o resultado da análise dos óbitos (interpolação e, se `extrapolar`,
     Holt-Winters) com `diaria` trocada por dia, valor (= Pi), obitos,
     nascimentos, populacao, populacao_ibge e observado, e:
       mortalidade_anual -> por ano: óbitos, nascimentos, população média, Pi médio
@@ -1018,7 +1031,7 @@ def resumo_texto(res, incluir_previsao=True):
         )
     linhas += [
         "",
-        f"[Interpolacao] Histospline (PCHIP no acumulado)  |  maior erro do total "
+        f"[Interpolacao] Linear do acumulado (total do mes / dias)  |  maior erro do total "
         f"mensal = {res['erro_conservacao']:.2e}",
     ]
     if res["modelo_tendencia"] is not None:
@@ -1040,7 +1053,7 @@ def resumo_texto(res, incluir_previsao=True):
     return "\n".join(linhas)
 
 def resumo_saldo(res):
-    """Resumo do saldo: as duas histopolações e a integral do saldo diário."""
+    """Resumo do saldo: as duas interpolações e a integral do saldo diário."""
     integ = res["integral"]
     d     = res["diaria"]
     return "\n".join([
@@ -1048,7 +1061,7 @@ def resumo_saldo(res):
         "",
         resumo_texto(res["res_b"], incluir_previsao=False),
         "",
-        f"[Saldo] {res['col_valor']} por dia = diferenca das duas histosplines  |  "
+        f"[Saldo] {res['col_valor']} por dia = diferenca das duas interpolacoes  |  "
         f"{d['dia'].iloc[0]} a {d['dia'].iloc[-1]} ({len(d)} dias)",
         f"[Integral do saldo] {descrever_integral(integ)}"
     ])
@@ -1063,7 +1076,7 @@ def resumo_mortalidade(res):
         "",
         f"[Populacao] '{res['arquivo_populacao']}', linha '{LINHA_POPULACAO}' "
         f"({res['populacao_anual'].index[0]}-{res['populacao_anual'].index[-1]})",
-        f"  Histopolacao anual -> diaria ate {res['dia_ancora']}  |  maior |media do ano - "
+        f"  Anual -> diaria (constante no ano) ate {res['dia_ancora']}  |  maior |media do ano - "
         f"valor IBGE| = {res['erro_populacao']:.2e}",
     ]
     if (~d["observado"]).any():
@@ -1119,7 +1132,7 @@ def _dias_do_mes(x_absoluto):
 
 def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     """
-    Desenha a análise (scatter mensal + spline + projeção) em uma figura.
+    Desenha a análise (scatter mensal + interpolação + projeção) em uma figura.
 
     fig=None cria a figura via pyplot (uso em script); passando uma Figure já
     existente (ex.: embutida na interface), desenha nela sem usar o pyplot.
@@ -1139,18 +1152,18 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
         fig.clear()
         ax = fig.add_subplot(111)
 
-    # Interpolacao e projecao desenhadas em resolucao diaria. A histospline vai
+    # Interpolacao e projecao desenhadas em resolucao diaria. A interpolacao vai
     # da borda inicial do 1o mes a final do ultimo e vale NaN nos periodos
     # excluidos (sem total para conservar), o que interrompe a linha ali.
     # A mesma curva cobre a projecao (meses previstos pelo Holt-Winters e depois
     # desagregados), desenhada em outra cor a partir do fim do dado real.
-    spline  = res["spline"]
-    x_plot  = np.arange(spline.trechos[0][0], spline.fim_observado, 1/365)
-    y_plot  = spline(x_plot)
+    interp  = res["interpolacao"]
+    x_plot  = np.arange(interp.trechos[0][0], interp.fim_observado, 1/365)
+    y_plot  = interp(x_plot)
     extrapola = res["modelo_tendencia"] is not None
     if extrapola:
-        x_fut = np.arange(spline.fim_observado, spline.trechos[-1][1], 1/365)
-        y_fut = spline(x_fut)
+        x_fut = np.arange(interp.fim_observado, interp.trechos[-1][1], 1/365)
+        y_fut = interp(x_fut)
     else:
         x_fut = y_fut = np.array([])
 
@@ -1168,7 +1181,7 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
     y_rec       = (res["y_reconstruido"] / _dias_do_mes(x_rec)
                    if len(x_rec) else np.array([]))
 
-    # Escala do eixo y pelo que entra no modelo (dados usados, spline, lacuna
+    # Escala do eixo y pelo que entra no modelo (dados usados, interpolacao, lacuna
     # preenchida e projeção), com a mesma folga de 5% do autoscale: um pico no
     # período excluído esticaria o eixo e espremeria todo o resto no rodapé.
     usados       = np.concatenate([y_mensal, y_plot[np.isfinite(y_plot)],
@@ -1203,14 +1216,14 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
                 markersize=4, zorder=5,
                 label="Lacuna preenchida: reta global × sazonal (média/dia)")
     linha, = ax.plot(x_plot + ano_base, y_plot, color="royalblue", lw=1.5,
-                     label="Histospline (taxa diaria)")
+                     label="Interpolacao linear do acumulado (taxa diaria)")
     linha.taxa = True   # formata_tooltip: valor e taxa, nao media do mes
     if extrapola:
         ax.scatter(x_fut_mes, y_prev_mes,
                    color="purple", zorder=5, marker="x", s=30, alpha=0.8,
                    label="Holt-Winters mensal (media/dia)")
         proj, = ax.plot(x_fut + ano_base, y_fut, color="purple", lw=2, linestyle="--",
-                        label="Previsao em taxa diaria (Holt-Winters + histospline)")
+                        label="Previsao em taxa diaria (Holt-Winters / dias do mes)")
         proj.taxa = True
 
     ax.set_ylim(y_min, y_max)
@@ -1238,10 +1251,10 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
 def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
     """
     Três painéis com o mesmo eixo de datas: nascimentos e óbitos por dia,
-    população brasileira total por dia (IBGE histopolado no observado; na
+    população brasileira total por dia (IBGE constante no ano no observado; na
     previsão, população + nascimentos - óbitos) e Pi em óbitos por pessoa por
     dia. Observado em linha cheia, previsão tracejada; períodos excluídos ficam
-    vazios (sem total para histopolar).
+    vazios (sem total para interpolar).
     Retorna (fig, eixos, cursor), como `montar_figura`.
     """
     if fig is None:
@@ -1284,7 +1297,7 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
 
     # --- Painel 2: população total por dia ----------------------------------
     _linha(eixos[1], d["populacao"], obs, "royalblue", "-",
-           "IBGE histopolado (diário)", "População", 0)
+           "IBGE (constante no ano)", "População", 0)
     if prev.any():
         _linha(eixos[1], d["populacao"], prev, "purple", "--",
                "Projeção: população + nascimentos - óbitos", "População projetada", 0)
@@ -1336,7 +1349,7 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
 def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 8)):
     """
     Casos importados com o pior caso da Poisson, em dois painéis:
-      (1) observado: histopolação diária do SINAN e média diária de cada mês;
+      (1) observado: SINAN por dia (total do mês / dias) e média diária de cada mês;
       (2) projeção: casos importados acumulados desde o fim do observado,
           média (λ·t) e pior caso (quantil) a taxa constante.
     Retorna (fig, eixos, cursor), como `montar_figura`.
@@ -1352,7 +1365,7 @@ def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 
     d.index = pd.to_datetime(d.pop("dia"))
     d = d.asfreq("D")   # periodo excluido vira NaN e interrompe a linha
     ax = eixos[0]
-    linha, = ax.plot(d.index, d["valor"], color="royalblue", lw=1.2, label="Histospline (casos por dia)")
+    linha, = ax.plot(d.index, d["valor"], color="royalblue", lw=1.2, label="Interpolacao linear do acumulado (casos por dia)")
     linha.rotulo_tooltip = ("Casos importados por dia", 1.0, 2, False)
     meio = pd.to_datetime([datetime.date(*ano_mes(v), 15) for v in res["x_mensal"]])
     pontos = ax.scatter(meio, res["y_mensal"] / _dias_do_mes(res["x_mensal"]), color="crimson",
@@ -1361,7 +1374,7 @@ def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 
     for ini, fim in res.get("excluir_periodo") or []:
         ax.axvspan(pd.Timestamp(_dia_para_data(ini)), pd.Timestamp(_dia_para_data(fim)),
                    color="gray", alpha=0.08, zorder=0)
-    ax.set_title(titulo or f"Casos importados de sarampo - observado (SINAN, histopolação)",
+    ax.set_title(titulo or f"Casos importados de sarampo - observado (SINAN, total do mês / dias)",
                  fontsize=12, fontweight="bold")
     ax.set_ylabel("Casos por dia")
     ax.legend(loc="upper left", fontsize=8)
@@ -1391,7 +1404,7 @@ def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 
 
 def montar_figura_saldo(res, fig=None, titulo=None, figsize=(14, 8)):
     """
-    Dois painéis com o mesmo eixo de datas: (1) as duas séries histopoladas
+    Dois painéis com o mesmo eixo de datas: (1) as duas séries interpoladas
     (taxa diária) com a média diária de cada mês como pontos; (2) o saldo
     diário (diferença das duas), com a área integrada sombreada - verde acima
     de zero, vermelha abaixo - e o saldo mensal (média/dia) como pontos.
@@ -1411,12 +1424,12 @@ def montar_figura_saldo(res, fig=None, titulo=None, figsize=(14, 8)):
     def _meio_do_mes(x_abs):
         return pd.to_datetime([datetime.date(*ano_mes(v), 15) for v in x_abs])
 
-    # --- Painel 1: as duas séries histopoladas -------------------------------
+    # --- Painel 1: as duas séries interpoladas -------------------------------
     ax = eixos[0]
     for chave_res, coluna, rotulo, cor in (("res_a", res["coluna_a"], res["nome_a"], "darkorange"),
                                            ("res_b", res["coluna_b"], res["nome_b"], "royalblue")):
         linha, = ax.plot(d.index, d[coluna], color=cor, lw=1.2,
-                         label=f"{rotulo} (histospline, taxa diária)")
+                         label=f"{rotulo} (taxa diária)")
         linha.rotulo_tooltip = (f"{rotulo}/dia", 1.0, 1, False)
         r = res[chave_res]
         pontos = ax.scatter(_meio_do_mes(r["x_mensal"]), r["y_mensal"] / _dias_do_mes(r["x_mensal"]),
@@ -1434,7 +1447,7 @@ def montar_figura_saldo(res, fig=None, titulo=None, figsize=(14, 8)):
         ax.fill_between(d.index, saldo, 0, where=cond.to_numpy(), interpolate=True,
                         color=cor, alpha=0.25, zorder=1, label=rot)
     linha, = ax.plot(d.index, saldo, color="black", lw=1.0,
-                     label="Saldo diário (diferença das histosplines)")
+                     label="Saldo diário (diferença das interpolações)")
     linha.rotulo_tooltip = ("Saldo/dia", 1.0, 1, False)
     pontos = ax.scatter(_meio_do_mes(res["x_mensal"]), res["y_mensal"] / _dias_do_mes(res["x_mensal"]),
                         color="crimson", s=16, zorder=5, label="Saldo mensal (média/dia)")
@@ -1501,11 +1514,12 @@ def salvar_nascimentos_diarios(res, diretorio=DIRETORIO_SAIDA_DIARIA):
 
 def salvar_importados_diarios(res, diretorio=DIRETORIO_SAIDA_DIARIA):
     """
-    Casos importados de sarampo por dia (entrada diária do modelo), histopolados
-    a partir dos totais mensais, em 'casos_importados_diarios.csv' (separador
-    ';'): dia; casos_importados (casos/dia); tipo. 'observado' = histopolação
-    do SINAN (soma do mês = total notificado); 'previsto' = pior caso da
-    Poisson a taxa constante (pior_caso_importados), o ε do SEIHRVS. Com período excluído o nome ganha '_sem_covid' (ou '_com_exclusao').
+    Casos importados de sarampo por dia (entrada diária do modelo), em
+    'casos_importados_diarios.csv' (separador ';'): dia; casos_importados
+    (casos/dia); tipo. 'observado' = total mensal do SINAN dividido entre os
+    dias do mês; 'previsto' = pior caso da Poisson a taxa constante
+    (pior_caso_importados), o ε do SEIHRVS. Com período excluído o nome ganha
+    '_sem_covid' (ou '_com_exclusao').
     Devolve o caminho.
     """
     d = res["diaria"]

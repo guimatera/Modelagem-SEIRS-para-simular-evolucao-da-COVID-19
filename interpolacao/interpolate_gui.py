@@ -69,15 +69,11 @@ def linhas_checkbox(arquivos, separador):
                          text_color="firebrick")]]
     linhas = []
     for i, arq in enumerate(arquivos):
-        importados = itp.eh_arquivo_importados(arq)
-        somente    = itp.eh_somente_histopolacao(arq) and not importados
-        if importados:
+        if itp.eh_arquivo_importados(arq):
             texto = "Projetar (Poisson, pior caso)"
-            dica  = ("Observado: histopolação dos totais mensais do SINAN. Futuro: total de "
+            dica  = ("Observado: total mensal do SINAN dividido entre os dias. Futuro: total de "
                      "casos = quantil q de Poisson(λ·H/365) (λ e q nas Opções), a taxa "
                      "constante. Igual ao SEIHRVS.")
-        elif somente:
-            texto, dica = "Somente histopolação", "Série só com histopolação: sem Holt-Winters."
         elif itp.eh_arquivo_obitos(arq):
             texto = "Extrapolar (Holt-Winters)"
             dica  = ("Na taxa de mortalidade, extrapola óbitos E nascimentos juntos: a "
@@ -89,7 +85,7 @@ def linhas_checkbox(arquivos, separador):
             sg.Checkbox(descrever_csv(arq, separador), default=(i == 0),
                         key=("-CSV-", arq), font=(FONT_FAMILY, FONT_SIZE)),
             sg.Push(),
-            sg.Checkbox(texto, default=False, disabled=somente,
+            sg.Checkbox(texto, default=False,
                         key=("-HW-", arq), tooltip=dica, font=(FONT_FAMILY, FONT_SIZE)),
         ])
     return linhas
@@ -328,7 +324,7 @@ def gerar_graficos(valores, arquivos):
     for arquivo in selecionados:
         extrapolar = bool(valores.get(("-HW-", arquivo)))   # Holt-Winters desta série
         try:
-            # Óbitos: histopolação dos óbitos e da população IBGE e a taxa
+            # Óbitos: interpolação dos óbitos e da população IBGE e a taxa
             # diária de mortalidade total do Brasil (Pi = óbitos/dia ÷ população)
             if itp.eh_arquivo_obitos(arquivo):
                 res = itp.analisar_mortalidade(anos_previsao=anos, excluir_periodo=excluir,
