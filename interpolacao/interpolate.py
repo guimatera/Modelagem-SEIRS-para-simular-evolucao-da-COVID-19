@@ -17,6 +17,8 @@ import pandas as pd
 import mplcursors
 from sklearn.metrics import r2_score
 from scipy.interpolate import PPoly
+from scipy.linalg import cholesky, solve_triangular
+from scipy.optimize import nnls
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -26,7 +28,7 @@ from SEIHRVS import pior_caso_poisson, formata_quantil
 # CONFIGURACOES - ajuste aqui para diferentes conjuntos de dados
 # =============================================================================
 # Sao dois metodos, um para cada metade do trabalho:
-#   INTERPOLACAO  -> linear do acumulado (total do mes dividido igualmente entre os dias)
+#   INTERPOLACAO  -> por retas continuas, conserva o total de cada mes
 #   EXTRAPOLACAO  -> Holt-Winters (suavizacao exponencial tripla)
 
 # Caminhos resolvidos a partir da pasta deste arquivo (e nao do diretorio de
@@ -89,7 +91,7 @@ EXCLUIR_PERIODO_PADRAO  = None  # ou PERIODO_COVID, para o script já rodar sem 
 #     em interpolate_gui.py), que continua lendo os dois arquivos.
 CSVS_IGNORADOS = ("doses_*.csv", "emigracao_*.csv", "imigracao_*.csv")
 
-# CSVs que entram SÓ com a interpolação (total do mês dividido entre os dias):
+# CSVs que entram SÓ com a interpolação por retas (conserva o total do mês):
 # sem Holt-Winters e sem preenchimento da lacuna do período excluído.
 # Casos importados de sarampo são contagens raras e em surtos (zeros na maior
 # parte dos meses), sem a sazonalidade regular que o Holt-Winters supõe.
@@ -264,22 +266,32 @@ def carregar_dados_mensais(arquivo, separador, col_periodo, col_valor):
 
 
 # =============================================================================
-# 2. INTERPOLACAO LINEAR DO ACUMULADO (CONSERVA OS TOTAIS MENSAIS)
+# 2. INTERPOLACAO POR RETAS CONTINUAS (CONSERVA OS TOTAIS MENSAIS)
 # =============================================================================
 # Cada ponto e o TOTAL de um mes, e nao o valor da serie num instante.
-# Interpolacao em linha reta (recomendacao do orientador): o acumulado A(t) e
-# ligado por retas entre as bordas dos meses, ou seja, o total de cada mes e
-# dividido IGUALMENTE entre os dias daquele mes (valor diario = total / dias do
-# mes). Restricoes atendidas por construcao:
-#   1. integral de cada mes = total do mes (A(fim) - A(inicio));
-#   2. valores nos nos iguais: A(borda) = acumulado exato dos meses;
-#   3. nao negatividade: valor diario = total / dias >= 0.
-# Consequencia (hipotese declarada): o valor diario e constante dentro do mes e
-# muda em degrau na virada do mes; a forma dentro do mes nao vem dos dados.
+# Interpolacao por retas (recomendacao do orientador): a taxa diaria r(t) e
+# linear por partes, com NOS nas bordas e no meio de cada mes (duas retas por
+# mes), e obedece a tres restricoes:
+#   1. integral de cada mes = total do mes:  L/4 * (r_ini + 2 r_meio + r_fim) = Y;
+#   2. continuidade: retas vizinhas tem o mesmo valor no no compartilhado (nao
+#      ha salto na virada do mes);
+#   3. nao negatividade: r >= 0 em todos os nos (logo em todo t).
+# As restricoes nao fixam a curva: os graus de liberdade restantes sao
+# escolhidos pela MENOR VARIACAO DE INCLINACAO (soma dos quadrados das mudancas
+# de inclinacao entre retas vizinhas), problema quadratico resolvido de forma
+# exata pela reducao a NNLS de Lawson & Hanson (1974, "Solving Least Squares
+# Problems", cap. 23).
+# Por que o no do meio: so com nos nas bordas sobra 1 grau de liberdade; nos
+# nascimentos e obitos a curva vira dente de serra (salto mediano entre nos de
+# 77% e 67% da taxa media) e nos casos importados (186 de 238 meses zerados)
+# nao ha solucao com r >= 0.
+# Hipotese declarada: a forma dentro do mes (duas retas) nao vem dos dados; os
+# dados so fixam o total do mes.
 #
-# O acumulado e montado sobre DIAS de calendario (fevereiro tem 28 ou 29), entao
-# a curva e uma TAXA DIARIA (unidades/dia) e o mes curto deixa de aparecer como
-# queda. A soma dos valores diarios de um mes e o total do mes.
+# A curva e montada sobre DIAS de calendario (fevereiro tem 28 ou 29), entao e
+# uma TAXA DIARIA (unidades/dia) e o mes curto deixa de aparecer como queda. O
+# valor de um dia e a integral da curva naquele dia; a soma dos dias do mes e o
+# total do mes.
 
 def _inicio_do_mes(indice):
     """Mês absoluto (ano*12 + mes-1) -> ano fracionário do 1º dia, em datas reais."""
@@ -306,27 +318,88 @@ def _dia_para_ano(dia):
     dias = np.where([calendar.isleap(a) for a in ano.ravel()], 366, 365).reshape(dia.shape)
     return ano + (dia - jan1) / dias
 
-def interpolar_acumulado(bordas_dias, totais):
+def _minimos_quadrados_desigualdade(H, g, Gc, hc):
     """
-    Interpolação linear do acumulado: `totais[i]` é o total do intervalo
-    [bordas_dias[i], bordas_dias[i+1]) (dias ordinais, intervalos encostados),
-    dividido igualmente entre os dias do intervalo.
+    min 1/2 v'Hv + g'v  sujeito a  Gc v >= hc  (H definida positiva), exato:
+    Lawson & Hanson (1974), cap. 23. Com H = R'R e f = -R^-T g, o problema é
+    min ||R v - f|| (LSI); z = R v - f leva a min ||z|| com (Gc R^-1) z >=
+    hc - Gc R^-1 f (LDP), que sai de um NNLS.
+    """
+    R = cholesky(H)                               # H = R'R, R triangular superior
+    f = -solve_triangular(R, g, trans="T")
+    Gz = solve_triangular(R, Gc.T, trans="T").T   # Gc R^-1
+    hz = hc - Gz @ f
+    E = np.vstack([Gz.T, hz[None, :]])
+    alvo = np.zeros(E.shape[0])
+    alvo[-1] = 1.0
+    w, _ = nnls(E, alvo, maxiter=50 * E.shape[1])
+    r = E @ w - alvo
+    if abs(r[-1]) < 1e-12:
+        raise RuntimeError("Interpolação por retas sem solução viável.")
+    z = -r[:-1] / r[-1]
+    return solve_triangular(R, z + f)
 
-    Devolve o acumulado A(dia) (PPoly de grau 1 que passa por (bordas,
-    acumulado), A(bordas[0]) = 0); a taxa é A.derivative() (total / dias, constante
-    no intervalo) e o total de um dia d é A(d+1) - A(d). Serve para meses ou anos.
+def interpolar_por_retas(bordas_dias, totais):
+    """
+    Interpolação por retas contínuas: `totais[i]` é o total do intervalo
+    [bordas_dias[i], bordas_dias[i+1]) (dias ordinais, intervalos encostados).
+
+    A taxa r(dia) é linear por partes, com nós nas bordas e no meio de cada
+    intervalo, contínua, com integral de cada intervalo = total e r >= 0 nos
+    nós; os graus de liberdade restantes minimizam a soma dos quadrados das
+    mudanças de inclinação entre retas vizinhas.
+
+    Variáveis: os valores v nas bordas. O valor no meio de cada intervalo sai
+    da restrição de integral, m = 2Y/L - (v_ini + v_fim)/2, então a integral é
+    exata por construção; r >= 0 vira v >= 0 e v_ini + v_fim <= 4Y/L.
+
+    Devolve o acumulado A(dia) (PPoly de grau 2, A(bordas[0]) = 0); a taxa é
+    A.derivative() e o total de um dia d é A(d+1) - A(d). Serve para meses ou
+    anos.
     """
     b = np.asarray(bordas_dias, dtype=float)
-    y = np.asarray(totais, dtype=float)
-    if np.any(y < 0):
-        raise ValueError("A interpolação exige totais não negativos (valor diário >= 0).")
-    acumulado = np.concatenate([[0.0], np.cumsum(y)])
-    return PPoly(np.vstack([y / np.diff(b), acumulado[:-1]]), b)
+    Y = np.asarray(totais, dtype=float)
+    if np.any(Y < 0):
+        raise ValueError("A interpolação exige totais não negativos (r >= 0).")
+    n = Y.size
+    L = np.diff(b)
+    t = np.empty(2 * n + 1)                       # nós: borda, meio, borda, ...
+    t[0::2], t[1::2] = b, b[:-1] + L / 2
+    escala = max(float(Y.sum() / L.sum()), 1e-300)   # condicionamento: taxa média = 1
+    q = 4 * Y / L / escala                        # m_i >= 0  <=>  v_i + v_{i+1} <= q_i
+
+    # u (valores nos nós, escalados) = M v + c
+    M = np.zeros((2 * n + 1, n + 1))
+    M[0::2] = np.eye(n + 1)
+    M[1::2, :-1] -= 0.5 * np.eye(n)
+    M[1::2, 1:]  -= 0.5 * np.eye(n)
+    c = np.zeros(2 * n + 1)
+    c[1::2] = q / 2
+    # Mudanças de inclinação nos nós internos: D u, com h = L/2 nas duas retas de cada intervalo
+    h = np.diff(t)
+    S = np.zeros((2 * n, 2 * n + 1))              # inclinações (u_{k+1} - u_k) / h_k
+    S[np.arange(2 * n), np.arange(2 * n)] = -1 / h
+    S[np.arange(2 * n), np.arange(1, 2 * n + 1)] = 1 / h
+    D = (S[1:] - S[:-1]) * np.median(h)           # adimensional
+    A_, d_ = D @ M, D @ c
+
+    # Restrições Gc v >= hc:  v >= 0  e  -(v_i + v_{i+1}) >= -q_i
+    G = np.zeros((n, n + 1))
+    G[np.arange(n), np.arange(n)] = 1
+    G[np.arange(n), np.arange(1, n + 1)] = 1
+    v = _minimos_quadrados_desigualdade(A_.T @ A_, A_.T @ d_, np.vstack([np.eye(n + 1), -G]),
+                                        np.concatenate([np.zeros(n + 1), -q]))
+    v = np.clip(v, 0, None)                       # resíduo de arredondamento (~1e-15)
+    v[1:] = np.minimum(v[1:], np.maximum(q - v[:-1], 0))
+    u = np.clip((M @ v + c) * escala, 0, None)    # integral exata (meio calculado de v)
+
+    taxa = PPoly(np.vstack([np.diff(u) / h, u[:-1]]), t)
+    return taxa.antiderivative()
 
 class InterpolacaoMensal:
     """
-    Taxa diária com o total de cada mês dividido igualmente entre os dias do
-    mês (`interpolar_acumulado`). x em anos fracionários normalizados
+    Taxa diária por retas contínuas que conserva o total de cada mês
+    (`interpolar_por_retas`). x em anos fracionários normalizados
     (x_absoluto - ano_base), com os pontos no meio do mês como em
     `carregar_dados_mensais`; y são os totais.
 
@@ -348,9 +421,9 @@ class InterpolacaoMensal:
         self.ano_base      = ano_base
         self.fim_observado = _inicio_do_mes(ultimo + 1) - ano_base
 
-        # Por dentro tudo em dias ordinais: o acumulado A(dia) e linear por partes
-        # entre as bordas dos meses e a taxa diaria A'(dia) = total do mes / dias.
-        # As bordas em x (anos) ficam para o grafico.
+        # Por dentro tudo em dias ordinais: a taxa diaria r(dia) e linear por
+        # partes (continua) e o acumulado A(dia) e a integral dela. As bordas em
+        # x (anos) ficam para o grafico.
         self.trechos = []   # (x_inicio, x_fim, acumulado A(dia) em dias)
         self.meses   = []   # (x_inicio, x_fim, total do mes)
         self.dia_fim_observado = int(round(float(_ano_para_dia(self.fim_observado + ano_base))))
@@ -360,7 +433,7 @@ class InterpolacaoMensal:
                                for k in range(i_seg[0], i_seg[-1] + 2)])
             dias = np.array([datetime.date(k // 12, k % 12 + 1, 1).toordinal()
                              for k in range(i_seg[0], i_seg[-1] + 2)], dtype=float)
-            acumulado = interpolar_acumulado(dias, y_seg)
+            acumulado = interpolar_por_retas(dias, y_seg)
             self.trechos.append((float(bordas[0]), float(bordas[-1]), acumulado))
             self.meses += list(zip(bordas[:-1], bordas[1:], y_seg))
 
@@ -400,7 +473,8 @@ class InterpolacaoMensal:
             dias   = np.arange(d0, d1)
             partes.append(pd.DataFrame({
                 "dia":       [datetime.date.fromordinal(int(d)) for d in dias],
-                "valor":     acumulado(dias + 1) - acumulado(dias),
+                # max(., 0): só zera arredondamento (~1e-14) de dias com taxa 0
+                "valor":     np.maximum(acumulado(dias + 1) - acumulado(dias), 0.0),
                 "observado": dias < self.dia_fim_observado,
             }))
         return pd.concat(partes, ignore_index=True)
@@ -592,8 +666,8 @@ def analisar_csv(arquivo,
                  excluir_periodo=EXCLUIR_PERIODO_PADRAO,
                  extrapolar=True):
     """
-    Interpolação linear do acumulado (total de cada mês dividido igualmente
-    entre os dias) e, se `extrapolar`, extrapolação por Holt-Winters.
+    Interpolação por retas contínuas (conserva o total de cada mês) e, se
+    `extrapolar`, extrapolação por Holt-Winters.
     Retorna um dicionário com os dados, os modelos e as métricas do arquivo.
     excluir_periodo: None, um (ini, fim) ou uma lista deles.
     CSVs de `CSVS_SEM_HOLT_WINTERS` ignoram `extrapolar` (só a interpolação).
@@ -723,7 +797,7 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
     x        = x_mensal[ordem] - ano_base
     y        = y_mensal[ordem]
 
-    # --- Interpolacao linear do acumulado, conserva o total de cada mes ------
+    # --- Interpolacao por retas continuas, conserva o total de cada mes -----
     interpolacao = InterpolacaoMensal(x, y, ano_base)
 
     # Preenchimento da lacuna do periodo excluido (reta global x sazonal, o mesmo
@@ -844,11 +918,11 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
 # --- Taxa diaria de mortalidade ---------------------------------------------
 # Pi(dia) = obitos(dia) / populacao(dia), em obitos por pessoa por dia (unidade
 # do Pi do SEIHRVS), sobre a populacao brasileira inteira.
-#   Obitos e nascimentos: total mensal dividido entre os dias (analisar_csv)
+#   Obitos e nascimentos: interpolacao por retas dos totais mensais (analisar_csv)
 #     e, se a extrapolacao estiver ligada, Holt-Winters nos totais mensais de
 #     cada serie, desagregado por dia do mesmo jeito.
-#   Populacao no periodo OBSERVADO: populacao anual total do IBGE, constante
-#     em todos os dias do ano (populacao_diaria).
+#   Populacao no periodo OBSERVADO: populacao anual total do IBGE interpolada
+#     por retas para dias (populacao_diaria).
 #   Populacao no periodo PROJETADO: parte do valor diario do IBGE no ultimo dia
 #     observado e avanca pelo balanco P(d+1) = P(d) + nascimentos(d) - obitos(d),
 #     com nascimentos e obitos diarios do Holt-Winters.
@@ -859,9 +933,8 @@ def analisar_serie(x_mensal, y_mensal, arquivo, col_periodo, col_valor,
 #     todas as idades e compartimentos, como no modelo;
 #   - a projecao da populacao e FECHADA: so nascimentos - obitos, sem o saldo
 #     migratorio;
-#   - obitos e nascimentos sao constantes dentro do mes, e a populacao dentro do
-#     ano (interpolacao linear do acumulado): a forma intra-mes/ano nao vem dos
-#     dados.
+#   - a forma dentro do mes (obitos, nascimentos) e do ano (populacao) vem so da
+#     interpolacao por retas (menor variacao de inclinacao).
 
 def ler_populacao_anual(arquivo=ARQUIVO_POPULACAO, linha=LINHA_POPULACAO):
     """CSV do Tabnet/IBGE (latin-1, ';', cabeçalho na 4ª linha) -> Series ano -> população."""
@@ -875,16 +948,16 @@ def ler_populacao_anual(arquivo=ARQUIVO_POPULACAO, linha=LINHA_POPULACAO):
 
 def populacao_diaria(pop_anual):
     """
-    Anual -> diária pela interpolação linear do acumulado: cada ano entra com
-    população x dias do ano (pessoa-dia), dividida igualmente entre os dias,
-    então o valor de um dia é a população do ano. Devolve Series indexada pela data.
+    Anual -> diária pela interpolação por retas: cada ano entra com população x
+    dias do ano (pessoa-dia), e o valor de um dia é A(d+1) - A(d), a população
+    média daquele dia. Devolve Series indexada pela data.
     """
     anos = pop_anual.index.to_numpy()
     if not np.all(np.diff(anos) == 1):
         raise ValueError("A projeção anual precisa de anos consecutivos.")
     bordas = np.array([datetime.date(int(a), 1, 1).toordinal() for a in np.append(anos, anos[-1] + 1)],
                       dtype=float)
-    acumulado = interpolar_acumulado(bordas, pop_anual.to_numpy() * np.diff(bordas))
+    acumulado = interpolar_por_retas(bordas, pop_anual.to_numpy() * np.diff(bordas))
     dias = np.arange(bordas[0], bordas[-1])
     return pd.Series(acumulado(dias + 1) - acumulado(dias),
                      index=pd.to_datetime([datetime.date.fromordinal(int(d)) for d in dias]),
@@ -1031,7 +1104,7 @@ def resumo_texto(res, incluir_previsao=True):
         )
     linhas += [
         "",
-        f"[Interpolacao] Linear do acumulado (total do mes / dias)  |  maior erro do total "
+        f"[Interpolacao] Retas continuas (nos nas bordas e no meio do mes)  |  maior erro do total "
         f"mensal = {res['erro_conservacao']:.2e}",
     ]
     if res["modelo_tendencia"] is not None:
@@ -1076,7 +1149,7 @@ def resumo_mortalidade(res):
         "",
         f"[Populacao] '{res['arquivo_populacao']}', linha '{LINHA_POPULACAO}' "
         f"({res['populacao_anual'].index[0]}-{res['populacao_anual'].index[-1]})",
-        f"  Anual -> diaria (constante no ano) ate {res['dia_ancora']}  |  maior |media do ano - "
+        f"  Anual -> diaria (retas continuas) ate {res['dia_ancora']}  |  maior |media do ano - "
         f"valor IBGE| = {res['erro_populacao']:.2e}",
     ]
     if (~d["observado"]).any():
@@ -1216,14 +1289,14 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
                 markersize=4, zorder=5,
                 label="Lacuna preenchida: reta global × sazonal (média/dia)")
     linha, = ax.plot(x_plot + ano_base, y_plot, color="royalblue", lw=1.5,
-                     label="Interpolacao linear do acumulado (taxa diaria)")
+                     label="Interpolacao por retas (taxa diaria)")
     linha.taxa = True   # formata_tooltip: valor e taxa, nao media do mes
     if extrapola:
         ax.scatter(x_fut_mes, y_prev_mes,
                    color="purple", zorder=5, marker="x", s=30, alpha=0.8,
                    label="Holt-Winters mensal (media/dia)")
         proj, = ax.plot(x_fut + ano_base, y_fut, color="purple", lw=2, linestyle="--",
-                        label="Previsao em taxa diaria (Holt-Winters / dias do mes)")
+                        label="Previsao em taxa diaria (Holt-Winters + retas)")
         proj.taxa = True
 
     ax.set_ylim(y_min, y_max)
@@ -1251,7 +1324,7 @@ def montar_figura(res, fig=None, titulo=None, label_y=None, figsize=(14, 6)):
 def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
     """
     Três painéis com o mesmo eixo de datas: nascimentos e óbitos por dia,
-    população brasileira total por dia (IBGE constante no ano no observado; na
+    população brasileira total por dia (IBGE interpolado por retas no observado; na
     previsão, população + nascimentos - óbitos) e Pi em óbitos por pessoa por
     dia. Observado em linha cheia, previsão tracejada; períodos excluídos ficam
     vazios (sem total para interpolar).
@@ -1297,7 +1370,7 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
 
     # --- Painel 2: população total por dia ----------------------------------
     _linha(eixos[1], d["populacao"], obs, "royalblue", "-",
-           "IBGE (constante no ano)", "População", 0)
+           "IBGE interpolado (diário)", "População", 0)
     if prev.any():
         _linha(eixos[1], d["populacao"], prev, "purple", "--",
                "Projeção: população + nascimentos - óbitos", "População projetada", 0)
@@ -1349,7 +1422,7 @@ def montar_figura_mortalidade(res, fig=None, titulo=None, figsize=(14, 8)):
 def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 8)):
     """
     Casos importados com o pior caso da Poisson, em dois painéis:
-      (1) observado: SINAN por dia (total do mês / dias) e média diária de cada mês;
+      (1) observado: SINAN por dia (interpolação por retas) e média diária de cada mês;
       (2) projeção: casos importados acumulados desde o fim do observado,
           média (λ·t) e pior caso (quantil) a taxa constante.
     Retorna (fig, eixos, cursor), como `montar_figura`.
@@ -1365,7 +1438,7 @@ def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 
     d.index = pd.to_datetime(d.pop("dia"))
     d = d.asfreq("D")   # periodo excluido vira NaN e interrompe a linha
     ax = eixos[0]
-    linha, = ax.plot(d.index, d["valor"], color="royalblue", lw=1.2, label="Interpolacao linear do acumulado (casos por dia)")
+    linha, = ax.plot(d.index, d["valor"], color="royalblue", lw=1.2, label="Interpolacao por retas (casos por dia)")
     linha.rotulo_tooltip = ("Casos importados por dia", 1.0, 2, False)
     meio = pd.to_datetime([datetime.date(*ano_mes(v), 15) for v in res["x_mensal"]])
     pontos = ax.scatter(meio, res["y_mensal"] / _dias_do_mes(res["x_mensal"]), color="crimson",
@@ -1374,7 +1447,7 @@ def montar_figura_importados_pior_caso(res, fig=None, titulo=None, figsize=(14, 
     for ini, fim in res.get("excluir_periodo") or []:
         ax.axvspan(pd.Timestamp(_dia_para_data(ini)), pd.Timestamp(_dia_para_data(fim)),
                    color="gray", alpha=0.08, zorder=0)
-    ax.set_title(titulo or f"Casos importados de sarampo - observado (SINAN, total do mês / dias)",
+    ax.set_title(titulo or f"Casos importados de sarampo - observado (SINAN, interpolação por retas)",
                  fontsize=12, fontweight="bold")
     ax.set_ylabel("Casos por dia")
     ax.legend(loc="upper left", fontsize=8)
@@ -1516,8 +1589,8 @@ def salvar_importados_diarios(res, diretorio=DIRETORIO_SAIDA_DIARIA):
     """
     Casos importados de sarampo por dia (entrada diária do modelo), em
     'casos_importados_diarios.csv' (separador ';'): dia; casos_importados
-    (casos/dia); tipo. 'observado' = total mensal do SINAN dividido entre os
-    dias do mês; 'previsto' = pior caso da Poisson a taxa constante
+    (casos/dia); tipo. 'observado' = interpolação por retas dos totais mensais
+    do SINAN (soma do mês = total); 'previsto' = pior caso da Poisson a taxa constante
     (pior_caso_importados), o ε do SEIHRVS. Com período excluído o nome ganha
     '_sem_covid' (ou '_com_exclusao').
     Devolve o caminho.

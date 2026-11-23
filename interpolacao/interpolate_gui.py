@@ -71,7 +71,7 @@ def linhas_checkbox(arquivos, separador):
     for i, arq in enumerate(arquivos):
         if itp.eh_arquivo_importados(arq):
             texto = "Projetar (Poisson, pior caso)"
-            dica  = ("Observado: total mensal do SINAN dividido entre os dias. Futuro: total de "
+            dica  = ("Observado: interpolação por retas dos totais mensais do SINAN. Futuro: total de "
                      "casos = quantil q de Poisson(λ·H/365) (λ e q nas Opções), a taxa "
                      "constante. Igual ao SEIHRVS.")
         elif itp.eh_arquivo_obitos(arq):
